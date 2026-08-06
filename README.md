@@ -15,7 +15,11 @@ Use the project URL only (e.g. `https://xxxx.supabase.co`) — no `/rest/v1` suf
 ### Supabase schema
 
 1. Run `supabase/schema.sql` in the SQL editor.
-2. Run `supabase/seed.sql` to load ~38 exercises.
+2. Run `supabase/seed.sql` to load ~38 exercises (+ equipment / contraindication tags).
+3. Run `supabase/seed-substitutions.sql` for the ranked `substitutions` catalog.
+4. If the DB already exists from an older schema, also run:
+   - `supabase/logs-rpe-pain.sql` (RPE / pain columns on `logs`)
+   - `supabase/exercises-substitutions.sql` (exercise metadata columns + `substitutions` table)
 
 ### Day 2 — AI program generation (Edge Function)
 
@@ -40,7 +44,7 @@ supabase secrets set ANTHROPIC_API_KEY=sk-ant-your-key-here
 supabase functions deploy generate-program
 ```
 
-4. Restart `npm run dev` and open the app. With no `scheduled_workouts` for your user, the onboarding form appears, calls the Edge Function, and writes `workouts` / `scheduled_workouts` / `workout_exercises`.
+4. Restart `npm run dev` and open the app. With no `scheduled_workouts` for your user, the onboarding form appears, calls the Edge Function, and writes **week 1** into `workouts` / `scheduled_workouts` / `workout_exercises`. Later weeks are generated adaptively from logs (RPE, completion, pain flags) via **Generate next week** on the calendar.
 
 ### Auth
 
@@ -50,3 +54,4 @@ supabase functions deploy generate-program
 2. Sign up in the app.
 3. If you have old test-user workouts/logs, run `supabase/reassign-test-data.sql` (fill in old + new UUIDs) **before** enabling RLS.
 4. Run `supabase/auth.sql` to attach the auth FK and enable RLS on all 6 tables.
+5. Run `supabase/leaderboard.sql` for the family leaderboard RPC (`family_leaderboard`).

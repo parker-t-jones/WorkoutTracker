@@ -4,16 +4,26 @@ import WorkoutDetail from './components/WorkoutDetail'
 import LogSet from './components/LogSet'
 import OnboardingForm from './components/OnboardingForm'
 import ProgressView from './components/ProgressView'
+import LeaderboardView from './components/LeaderboardView'
 import TabBar from './components/TabBar'
 import AuthScreen from './components/AuthScreen'
 import AccountView from './components/AccountView'
+import WeekAdaptationSummary from './components/WeekAdaptationSummary'
 import { supabase } from './lib/supabase'
 import {
   loadProgramData,
   generateAndSaveProgram,
+  generateAndSaveNextWeek,
+  canGenerateNextWeek,
+  filterScheduledForCalendar,
   GENERATE_ERROR,
 } from './lib/program'
-import { saveSetLog } from './lib/logging'
+import {
+  saveSetLog,
+  updateSetLog,
+  updateExerciseRpe,
+  updateExercisePain,
+} from './lib/logging'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
 
 export default function App() {
@@ -26,6 +36,10 @@ export default function App() {
   const [onboardingError, setOnboardingError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const submittingRef = useRef(false)
+  const [generatingNextWeek, setGeneratingNextWeek] = useState(false)
+  const generatingNextWeekRef = useRef(false)
+  const [nextWeekError, setNextWeekError] = useState(null)
+  const [adaptationSummary, setAdaptationSummary] = useState(null)
 
   const [scheduledWorkouts, setScheduledWorkouts] = useState([])
   const [workoutsById, setWorkoutsById] = useState({})
@@ -33,10 +47,14 @@ export default function App() {
   const [userId, setUserId] = useState(null)
   const [logs, setLogs] = useState([])
 
-  const [view, setView] = useState('calendar') // calendar | progress | account | workout | log
+  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | workout | log | week-summary
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
+  const [editLogId, setEditLogId] = useState(null)
+  const [logShowRpe, setLogShowRpe] = useState(false)
   const [savingLog, setSavingLog] = useState(false)
+  const [savingRpe, setSavingRpe] = useState(false)
+  const [savingPainId, setSavingPainId] = useState(null)
   const [logError, setLogError] = useState(null)
   const [justCompleted, setJustCompleted] = useState(false)
 
@@ -169,6 +187,39 @@ export default function App() {
     }
   }
 
+  async function handleGenerateNextWeek() {
+    if (generatingNextWeekRef.current || !userId) return
+    generatingNextWeekRef.current = true
+    setGeneratingNextWeek(true)
+    setNextWeekError(null)
+
+    try {
+      const result = await generateAndSaveNextWeek({
+        userId,
+        scheduledWorkouts,
+        workouts: Object.values(workoutsById),
+        workoutDetails,
+        logs,
+      })
+
+      // Always reload calendar data after insert — don't rely on pre-generate state.
+      const data = await loadProgramData(userId)
+      applyProgramData(data)
+
+      setAdaptationSummary({
+        weekNumber: result.weekNumber,
+        decisions: result.decisions ?? [],
+      })
+      setView('week-summary')
+    } catch (err) {
+      console.error(err)
+      setNextWeekError(err?.message || GENERATE_ERROR)
+    } finally {
+      generatingNextWeekRef.current = false
+      setGeneratingNextWeek(false)
+    }
+  }
+
   async function handleSignOut() {
     await signOut()
   }
@@ -192,13 +243,17 @@ export default function App() {
   function openWorkout(id) {
     setScheduledId(id)
     setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
     setJustCompleted(false)
     setLogError(null)
     setView('workout')
   }
 
-  function openLog(weId) {
+  function openLog(weId, options = {}) {
     setWorkoutExerciseId(weId)
+    setEditLogId(options.editLogId ?? null)
+    setLogShowRpe(Boolean(options.showRpe))
     setLogError(null)
     setView('log')
   }
@@ -207,6 +262,8 @@ export default function App() {
     setView('calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
     setJustCompleted(false)
     setLogError(null)
   }
@@ -214,18 +271,29 @@ export default function App() {
   function backToWorkout() {
     setView('workout')
     setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
     setLogError(null)
+  }
+
+  function mergeUpdatedLogs(updatedRows) {
+    if (!updatedRows?.length) return
+    const byId = Object.fromEntries(updatedRows.map((row) => [row.id, row]))
+    setLogs((prev) => prev.map((row) => byId[row.id] ?? row))
   }
 
   async function handleSaveLog({ set_number, actual_reps, actual_weight }) {
     const scheduled = getScheduledBundle(scheduledId)
-    if (!scheduled || !userId || !workoutExerciseId) return
+    if (!scheduled || !workoutExerciseId) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
 
     setSavingLog(true)
     setLogError(null)
     try {
       const { log, completed } = await saveSetLog({
-        userId,
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         setNumber: set_number,
@@ -237,6 +305,7 @@ export default function App() {
 
       setLogs((prev) => [...prev, log])
 
+      // Stay on the log screen so the optional post-exercise RPE prompt can show.
       if (completed) {
         setScheduledWorkouts((prev) =>
           prev.map((sw) =>
@@ -244,14 +313,83 @@ export default function App() {
           ),
         )
         setJustCompleted(true)
-        setView('workout')
-        setWorkoutExerciseId(null)
       }
     } catch (err) {
       console.error(err)
       setLogError(err.message || 'Could not save set — try again')
     } finally {
       setSavingLog(false)
+    }
+  }
+
+  async function handleUpdateLog({ log_id, actual_reps, actual_weight }) {
+    if (!log_id) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+
+    setSavingLog(true)
+    setLogError(null)
+    try {
+      const log = await updateSetLog({
+        logId: log_id,
+        actualReps: actual_reps,
+        actualWeight: actual_weight,
+      })
+      mergeUpdatedLogs([log])
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not update set — try again')
+      throw err
+    } finally {
+      setSavingLog(false)
+    }
+  }
+
+  async function handleSaveRpe(rpe) {
+    if (!workoutExerciseId) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+    setSavingRpe(true)
+    setLogError(null)
+    try {
+      const updated = await updateExerciseRpe({
+        workoutExerciseId,
+        rpe,
+      })
+      mergeUpdatedLogs(updated)
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not save RPE — try again')
+      throw err
+    } finally {
+      setSavingRpe(false)
+    }
+  }
+
+  async function handleSavePain({ workoutExerciseId: weId, painFlag, painNote }) {
+    if (!weId) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+    setSavingPainId(weId)
+    setLogError(null)
+    try {
+      const updated = await updateExercisePain({
+        workoutExerciseId: weId,
+        painFlag,
+        painNote,
+      })
+      mergeUpdatedLogs(updated)
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not save note — try again')
+    } finally {
+      setSavingPainId(null)
     }
   }
 
@@ -307,8 +445,28 @@ export default function App() {
     )
   }
 
+  if (view === 'week-summary' && adaptationSummary) {
+    return (
+      <WeekAdaptationSummary
+        weekNumber={adaptationSummary.weekNumber}
+        decisions={adaptationSummary.decisions}
+        onDismiss={() => {
+          setAdaptationSummary(null)
+          setView('calendar')
+        }}
+      />
+    )
+  }
+
   const scheduled =
     scheduledId != null ? getScheduledBundle(scheduledId) : null
+
+  const nextWeekEligibility = canGenerateNextWeek(
+    scheduledWorkouts,
+    workoutsById,
+    workoutDetails,
+  )
+  const calendarScheduled = filterScheduledForCalendar(scheduledWorkouts)
 
   if (view === 'log' && scheduled && workoutExerciseId) {
     const we = scheduled.exercises.find((e) => e.id === workoutExerciseId)
@@ -323,8 +481,13 @@ export default function App() {
           existingLogs={existingLogs}
           onBack={backToWorkout}
           onSave={handleSaveLog}
+          onUpdate={handleUpdateLog}
+          onSaveRpe={handleSaveRpe}
           saving={savingLog}
+          savingRpe={savingRpe}
           error={logError}
+          initialEditLogId={editLogId}
+          initialShowRpe={logShowRpe}
         />
       )
     }
@@ -337,13 +500,22 @@ export default function App() {
         logs={logs}
         onBack={backToCalendar}
         onLogExercise={openLog}
+        onSavePain={handleSavePain}
+        savingPainId={savingPainId}
         justCompleted={justCompleted}
+        error={logError}
       />
     )
   }
 
   const topTab =
-    view === 'progress' ? 'progress' : view === 'account' ? 'account' : 'calendar'
+    view === 'progress'
+      ? 'progress'
+      : view === 'leaderboard'
+        ? 'leaderboard'
+        : view === 'account'
+          ? 'account'
+          : 'calendar'
 
   return (
     <>
@@ -353,6 +525,8 @@ export default function App() {
           setView(tab)
           setScheduledId(null)
           setWorkoutExerciseId(null)
+          setEditLogId(null)
+          setLogShowRpe(false)
           setJustCompleted(false)
         }}
       />
@@ -362,13 +536,19 @@ export default function App() {
           workoutDetails={workoutDetails}
           logs={logs}
         />
+      ) : view === 'leaderboard' ? (
+        <LeaderboardView currentUserId={userId ?? session.user.id} />
       ) : view === 'account' ? (
         <AccountView email={session.user.email} onSignOut={handleSignOut} />
       ) : (
         <CalendarView
-          scheduledWorkouts={scheduledWorkouts}
+          scheduledWorkouts={calendarScheduled}
           getWorkout={getWorkout}
           onSelectScheduled={openWorkout}
+          canGenerateNextWeek={nextWeekEligibility.ready}
+          onGenerateNextWeek={handleGenerateNextWeek}
+          generatingNextWeek={generatingNextWeek}
+          generateNextWeekError={nextWeekError}
         />
       )}
     </>

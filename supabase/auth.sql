@@ -31,6 +31,7 @@ alter table public.workouts enable row level security;
 alter table public.scheduled_workouts enable row level security;
 alter table public.workout_exercises enable row level security;
 alter table public.logs enable row level security;
+alter table public.substitutions enable row level security;
 
 -- users: own row only
 drop policy if exists users_select_own on public.users;
@@ -61,6 +62,12 @@ create policy exercises_select_authenticated on public.exercises
 create policy exercises_insert_authenticated on public.exercises
   for insert to authenticated
   with check (true);
+
+-- substitutions: shared catalog (read-only for clients)
+drop policy if exists substitutions_select_authenticated on public.substitutions;
+create policy substitutions_select_authenticated on public.substitutions
+  for select to authenticated
+  using (true);
 
 -- workouts
 drop policy if exists workouts_select_own on public.workouts;

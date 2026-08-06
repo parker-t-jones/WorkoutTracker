@@ -2,6 +2,7 @@ export default function TabBar({ active, onChange }) {
   const tabs = [
     { id: 'calendar', label: 'Calendar' },
     { id: 'progress', label: 'Progress' },
+    { id: 'leaderboard', label: 'Leaderboard' },
     { id: 'account', label: 'Account' },
   ]
 
@@ -15,7 +16,7 @@ export default function TabBar({ active, onChange }) {
             type="button"
             onClick={() => onChange(tab.id)}
             className={[
-              'flex-1 rounded-md py-2 text-sm font-medium',
+              'flex-1 rounded-md px-1 py-2 text-xs font-medium sm:text-sm',
               selected
                 ? 'bg-stone-900 text-white'
                 : 'bg-white text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50',

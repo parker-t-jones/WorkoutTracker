@@ -75,7 +75,8 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
           Set up your program
         </h1>
         <p className="mt-2 text-sm text-stone-600">
-          Answer five questions and we&apos;ll generate a 4-week plan.
+          Answer five questions and we&apos;ll generate your first week.
+          Later weeks adapt from how you train.
         </p>
       </header>
 

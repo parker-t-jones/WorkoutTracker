@@ -1,5 +1,15 @@
 import { supabase } from './supabase'
 import { normalizeExerciseName, scheduleDateFor, nextMonday } from './user'
+import {
+  groupByWeekNumber,
+  maxWeekNumber,
+  canGenerateNextWeek,
+  buildPriorWeekAdaptation,
+  mondayAfterLastScheduled,
+  filterScheduledForCalendar,
+  filterScheduledToHorizon,
+  resolvePainSubstitutions,
+} from './adapt'
 
 const GENERATE_ERROR = "couldn't generate program, try again"
 
@@ -128,6 +138,17 @@ async function ensureUser(userId, answers) {
   return data
 }
 
+async function fetchUserProfile(userId) {
+  const client = assertSupabase()
+  const { data, error } = await client
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single()
+  if (error) throw error
+  return data
+}
+
 async function fetchExerciseCatalog() {
   const client = assertSupabase()
   const { data, error } = await client.from('exercises').select('*')
@@ -171,27 +192,10 @@ async function resolveExerciseId(name, catalog, catalogByNorm) {
   return data.id
 }
 
-/**
- * Call Edge Function, then insert workouts / scheduled_workouts / workout_exercises.
- */
-export async function generateAndSaveProgram(formAnswers, userId) {
+async function invokeGenerateProgram(body) {
   const client = assertSupabase()
-  if (!userId) throw new Error('Not signed in')
-  const user = await ensureUser(userId, formAnswers)
-  const catalog = await fetchExerciseCatalog()
-  const catalogByNorm = new Map(
-    catalog.map((e) => [normalizeExerciseName(e.name), e]),
-  )
-
   const { data, error } = await client.functions.invoke('generate-program', {
-    body: {
-      goal: formAnswers.goal,
-      experience_level: formAnswers.experience_level,
-      days_per_week: formAnswers.days_per_week,
-      equipment: formAnswers.equipment,
-      limitations: formAnswers.limitations || '',
-      exercise_names: catalog.map((e) => e.name),
-    },
+    body,
   })
 
   if (error) {
@@ -213,12 +217,27 @@ export async function generateAndSaveProgram(formAnswers, userId) {
   }
 
   const program = data?.program
-  if (!program?.weeks) {
+  if (!program?.weeks?.length) {
     throw new Error(GENERATE_ERROR)
   }
 
-  const startMonday = nextMonday()
-  const daysPerWeek = Number(formAnswers.days_per_week)
+  return program
+}
+
+async function insertProgramWeeks({
+  userId,
+  program,
+  daysPerWeek,
+  startMonday,
+  /** When true, schedule dates as if this is week 1 relative to startMonday
+   *  (used when appending adaptive weeks whose Monday is already week N's start). */
+  relativeToStartMonday = false,
+}) {
+  const client = assertSupabase()
+  const catalog = await fetchExerciseCatalog()
+  const catalogByNorm = new Map(
+    catalog.map((e) => [normalizeExerciseName(e.name), e]),
+  )
 
   for (const week of program.weeks) {
     for (let dayIndex = 0; dayIndex < week.days.length; dayIndex++) {
@@ -227,7 +246,7 @@ export async function generateAndSaveProgram(formAnswers, userId) {
       const { data: workout, error: wErr } = await client
         .from('workouts')
         .insert({
-          user_id: user.id,
+          user_id: userId,
           week_number: week.week_number,
           day_number: day.day_number,
           focus: day.focus,
@@ -257,8 +276,9 @@ export async function generateAndSaveProgram(formAnswers, userId) {
       const { error: weErr } = await client.from('workout_exercises').insert(weRows)
       if (weErr) throw weErr
 
+      const scheduleWeekNumber = relativeToStartMonday ? 1 : week.week_number
       const date = scheduleDateFor(
-        week.week_number,
+        scheduleWeekNumber,
         dayIndex,
         daysPerWeek,
         startMonday,
@@ -266,15 +286,191 @@ export async function generateAndSaveProgram(formAnswers, userId) {
 
       const { error: swErr } = await client.from('scheduled_workouts').insert({
         workout_id: workout.id,
-        user_id: user.id,
+        user_id: userId,
         date,
         status: 'pending',
       })
       if (swErr) throw swErr
     }
   }
+}
+
+/**
+ * Call Edge Function, then insert workouts / scheduled_workouts / workout_exercises.
+ * Onboarding: one week only.
+ */
+export async function generateAndSaveProgram(formAnswers, userId) {
+  if (!userId) throw new Error('Not signed in')
+  const user = await ensureUser(userId, formAnswers)
+  const catalog = await fetchExerciseCatalog()
+
+  const program = await invokeGenerateProgram({
+    mode: 'initial',
+    goal: formAnswers.goal,
+    experience_level: formAnswers.experience_level,
+    days_per_week: formAnswers.days_per_week,
+    equipment: formAnswers.equipment,
+    limitations: formAnswers.limitations || '',
+    exercise_names: catalog.map((e) => e.name),
+  })
+
+  // Force week 1 in case the model drifts.
+  if (program.weeks?.[0]) {
+    program.weeks[0].week_number = 1
+    program.duration_weeks = 1
+    program.weeks = [program.weeks[0]]
+  }
+
+  const startMonday = nextMonday()
+  const daysPerWeek = Number(formAnswers.days_per_week)
+
+  await insertProgramWeeks({
+    userId: user.id,
+    program,
+    daysPerWeek,
+    startMonday,
+  })
 
   return user.id
 }
 
-export { GENERATE_ERROR }
+async function fetchSubstitutionsByPrimaryIds(exerciseIds) {
+  const client = assertSupabase()
+  const ids = [...new Set((exerciseIds ?? []).filter(Boolean))]
+  /** @type {Map<string, Array>} */
+  const byPrimary = new Map()
+  if (ids.length === 0) return byPrimary
+
+  const { data, error } = await client
+    .from('substitutions')
+    .select(
+      `
+      primary_exercise_id,
+      substitute_exercise_id,
+      reason_tag,
+      priority_rank,
+      substitute:exercises!substitutions_substitute_exercise_id_fkey (
+        id,
+        name,
+        equipment_required,
+        contraindication_tags,
+        movement_pattern
+      )
+    `,
+    )
+    .in('primary_exercise_id', ids)
+    .order('priority_rank', { ascending: true })
+
+  if (error) throw error
+
+  for (const row of data ?? []) {
+    const key = row.primary_exercise_id
+    if (!byPrimary.has(key)) byPrimary.set(key, [])
+    byPrimary.get(key).push(row)
+  }
+
+  return byPrimary
+}
+
+/**
+ * Adaptive next week from prior-week logs. Does not mutate existing weeks.
+ * Returns { weekNumber, decisions }.
+ */
+export async function generateAndSaveNextWeek({
+  userId,
+  scheduledWorkouts,
+  workouts,
+  workoutDetails,
+  logs,
+}) {
+  if (!userId) throw new Error('Not signed in')
+
+  const workoutsById = Object.fromEntries(
+    (workouts ?? []).map((w) => [w.id, w]),
+  )
+  // Prefer workoutDetails.workout when present
+  for (const [id, detail] of Object.entries(workoutDetails ?? {})) {
+    if (detail?.workout) workoutsById[id] = detail.workout
+  }
+
+  const eligibility = canGenerateNextWeek(
+    scheduledWorkouts,
+    workoutsById,
+    workoutDetails,
+  )
+  if (!eligibility.ready) {
+    throw new Error('Finish the current week before generating the next one')
+  }
+
+  const byWeek = groupByWeekNumber(
+    scheduledWorkouts,
+    workoutsById,
+    workoutDetails,
+  )
+  const maxWeek = maxWeekNumber(byWeek)
+  const weekEntry = byWeek.get(maxWeek)
+  if (!weekEntry) throw new Error(GENERATE_ERROR)
+
+  const built = buildPriorWeekAdaptation({
+    weekNumber: maxWeek,
+    weekWorkouts: weekEntry.workouts,
+    logs,
+  })
+
+  const profile = await fetchUserProfile(userId)
+  const painIds = built.decisions
+    .filter((d) => d.pain_flagged || d.decision === 'substitute')
+    .map((d) => d.exercise_id)
+    .filter(Boolean)
+
+  const substitutionsByPrimary = await fetchSubstitutionsByPrimaryIds(painIds)
+  const decisions = resolvePainSubstitutions(
+    built.decisions,
+    substitutionsByPrimary,
+    profile.equipment_access,
+  )
+  const exercise_performance = decisions
+  const { prior_week_program } = built
+
+  const catalog = await fetchExerciseCatalog()
+  const nextWeek = maxWeek + 1
+
+  const program = await invokeGenerateProgram({
+    mode: 'adaptive',
+    goal: profile.goal,
+    experience_level: profile.experience_level,
+    days_per_week: profile.days_per_week,
+    equipment: profile.equipment_access,
+    limitations: profile.limitations || '',
+    exercise_names: catalog.map((e) => e.name),
+    next_week_number: nextWeek,
+    prior_week_program,
+    exercise_performance,
+  })
+
+  if (program.weeks?.[0]) {
+    program.weeks[0].week_number = nextWeek
+    program.duration_weeks = 1
+    program.weeks = [program.weeks[0]]
+  }
+
+  const startMonday = mondayAfterLastScheduled(weekEntry.scheduled)
+  const daysPerWeek = Number(profile.days_per_week) || 3
+
+  await insertProgramWeeks({
+    userId,
+    program,
+    daysPerWeek,
+    startMonday,
+    relativeToStartMonday: true,
+  })
+
+  return { weekNumber: nextWeek, decisions }
+}
+
+export {
+  GENERATE_ERROR,
+  canGenerateNextWeek,
+  filterScheduledForCalendar,
+  filterScheduledToHorizon,
+}

@@ -16,7 +16,9 @@ create table if not exists exercises (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   movement_pattern text not null,
-  muscle_group text not null
+  muscle_group text not null,
+  equipment_required text,
+  contraindication_tags text[] not null default '{}'::text[]
 );
 
 create table if not exists workouts (
@@ -52,10 +54,28 @@ create table if not exists logs (
   set_number integer not null,
   actual_reps integer not null,
   actual_weight numeric,
+  rpe integer check (rpe is null or (rpe >= 1 and rpe <= 10)),
+  pain_flag boolean not null default false,
+  pain_note text,
   completed_at timestamptz not null default now()
+);
+
+-- Ranked alternate exercises for safe in-session / adaptive swaps.
+-- NEXT PASS: if every candidate for a pain-flagged lift still carries the
+-- same contraindication_tag (e.g. all vertical pulls share high_shoulder_strain),
+-- fall back to skip/deload that pattern for the week — do not serve a no-op swap.
+create table if not exists substitutions (
+  id uuid primary key default gen_random_uuid(),
+  primary_exercise_id uuid not null references exercises(id) on delete cascade,
+  substitute_exercise_id uuid not null references exercises(id) on delete cascade,
+  reason_tag text not null,
+  priority_rank integer not null check (priority_rank >= 1),
+  unique (primary_exercise_id, substitute_exercise_id),
+  check (primary_exercise_id <> substitute_exercise_id)
 );
 
 create index if not exists idx_workouts_user on workouts(user_id);
 create index if not exists idx_scheduled_workouts_user_date on scheduled_workouts(user_id, date);
 create index if not exists idx_workout_exercises_workout on workout_exercises(workout_id);
 create index if not exists idx_logs_workout_exercise on logs(workout_exercise_id);
+create index if not exists idx_substitutions_primary on substitutions(primary_exercise_id, priority_rank);

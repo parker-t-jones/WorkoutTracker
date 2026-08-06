@@ -2,7 +2,7 @@
 
 ## Overview
 
-A gym-tracking app (TrueCoach-style) for personal/family use, with an AI agent
+A gym-tracking app for personal/family use, with an AI agent
 that generates workout programs and schedules them for the user to complete.
 
 **Guiding principle for v1:** ship a working core in one week. Adaptive AI

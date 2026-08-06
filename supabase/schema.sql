@@ -79,3 +79,24 @@ create index if not exists idx_scheduled_workouts_user_date on scheduled_workout
 create index if not exists idx_workout_exercises_workout on workout_exercises(workout_id);
 create index if not exists idx_logs_workout_exercise on logs(workout_exercise_id);
 create index if not exists idx_substitutions_primary on substitutions(primary_exercise_id, priority_rank);
+
+-- AI-proposed pairings awaiting human review (never used live until approved).
+create table if not exists proposed_substitutions (
+  id uuid primary key default gen_random_uuid(),
+  primary_exercise_id uuid not null references exercises(id) on delete cascade,
+  substitute_exercise_id uuid references exercises(id) on delete set null,
+  proposed_new_exercise_name text,
+  reason_tag text not null,
+  reasoning text not null,
+  status text not null default 'pending'
+    check (status in ('pending', 'approved', 'rejected')),
+  rejection_note text,
+  created_at timestamptz not null default now(),
+  check (
+    substitute_exercise_id is not null
+    or (proposed_new_exercise_name is not null and length(trim(proposed_new_exercise_name)) > 0)
+  )
+);
+
+create index if not exists idx_proposed_substitutions_status
+  on proposed_substitutions(status, created_at desc);

@@ -465,6 +465,21 @@ export async function generateAndSaveNextWeek({
     relativeToStartMonday: true,
   })
 
+  // Background library growth: propose vetted-table additions for skips.
+  // Failures must not undo or fail the week that was already inserted.
+  try {
+    const { proposeSubstitutionsForSkippedDecisions } = await import(
+      './proposals.js'
+    )
+    await proposeSubstitutionsForSkippedDecisions({
+      decisions,
+      equipmentAccess: profile.equipment_access,
+      exerciseNames: catalog.map((e) => e.name),
+    })
+  } catch (err) {
+    console.error('Skip-proposal generation failed (week still saved):', err)
+  }
+
   return { weekNumber: nextWeek, decisions }
 }
 

@@ -20,6 +20,7 @@ Use the project URL only (e.g. `https://xxxx.supabase.co`) — no `/rest/v1` suf
 4. If the DB already exists from an older schema, also run:
    - `supabase/logs-rpe-pain.sql` (RPE / pain columns on `logs`)
    - `supabase/exercises-substitutions.sql` (exercise metadata columns + `substitutions` table)
+   - `supabase/proposed-substitutions.sql` (AI proposal review queue)
 
 ### Day 2 — AI program generation (Edge Function)
 

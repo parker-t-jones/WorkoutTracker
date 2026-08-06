@@ -236,6 +236,126 @@ Prefer exercise names from this library when possible (use exact spelling): ${ex
   return userPrompt
 }
 
+const PROPOSE_SYSTEM_PROMPT = `You are a certified strength coach proposing ONE safer substitute for an exercise that had to be skipped because every vetted alternate still carried the same contraindication risk.
+
+Rules:
+- Output ONLY valid JSON. No markdown, no code fences, no extra text.
+- Propose a genuinely lower-strain alternative for the stated movement pattern that does NOT retain every contraindication tag of the primary exercise.
+- Prefer an existing library exercise name (exact spelling) when a good option exists.
+- Only invent a new exercise name if nothing in the library is appropriate.
+- reason_tag must be one of: lower_joint_strain, equipment_alt, similar_pattern, controlled_load.
+- Never re-propose a pairing listed in previously_rejected.
+- Do not propose the primary exercise itself.
+
+Output schema:
+{
+  "reason_tag": "string",
+  "reasoning": "string — concise clinical/coaching explanation",
+  "substitute_exercise_name": "string or null — existing library name if using one",
+  "proposed_new_exercise_name": "string or null — only if inventing a new exercise"
+}`
+
+function validateProposal(proposal: unknown): proposal is {
+  reason_tag: string
+  reasoning: string
+  substitute_exercise_name: string | null
+  proposed_new_exercise_name: string | null
+} {
+  if (!proposal || typeof proposal !== "object") return false
+  const p = proposal as Record<string, unknown>
+  if (typeof p.reason_tag !== "string" || !p.reason_tag.trim()) return false
+  if (typeof p.reasoning !== "string" || !p.reasoning.trim()) return false
+
+  const existing =
+    p.substitute_exercise_name == null
+      ? null
+      : typeof p.substitute_exercise_name === "string"
+        ? p.substitute_exercise_name.trim() || null
+        : null
+  const neu =
+    p.proposed_new_exercise_name == null
+      ? null
+      : typeof p.proposed_new_exercise_name === "string"
+        ? p.proposed_new_exercise_name.trim() || null
+        : null
+
+  if (!existing && !neu) return false
+  // Normalize onto the object for callers
+  ;(p as Record<string, unknown>).substitute_exercise_name = existing
+  ;(p as Record<string, unknown>).proposed_new_exercise_name = existing
+    ? null
+    : neu
+  return true
+}
+
+function buildProposeUserPrompt(body: Record<string, unknown>): string {
+  const primary = body.primary_exercise ?? {}
+  const rejected = Array.isArray(body.previously_rejected)
+    ? body.previously_rejected
+    : []
+  const names = Array.isArray(body.exercise_names) ? body.exercise_names : []
+
+  return `Propose one safer substitute for this skipped exercise.
+
+Primary exercise:
+${JSON.stringify(primary, null, 2)}
+
+User equipment access: ${body.equipment ?? "unknown"}
+Pain note (if any): ${body.pain_note ?? "none"}
+
+Previously rejected pairings (do not re-propose unless clearly different circumstances):
+${JSON.stringify(rejected, null, 2)}
+
+Exercise library (prefer these exact names when suitable):
+${names.join(", ")}`
+}
+
+async function callAnthropic(
+  apiKey: string,
+  system: string,
+  userPrompt: string,
+  maxTokens = 2000,
+) {
+  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-5",
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  })
+
+  if (!anthropicRes.ok) {
+    const errText = await anthropicRes.text()
+    console.error("Anthropic error:", anthropicRes.status, errText)
+    return { error: "couldn't generate program, try again", status: 502 }
+  }
+
+  const anthropicJson = await anthropicRes.json()
+  const rawText =
+    anthropicJson?.content
+      ?.filter((block: { type: string }) => block.type === "text")
+      ?.map((block: { text: string }) => block.text)
+      ?.join("\n") ?? ""
+
+  if (!rawText) {
+    return { error: "couldn't generate program, try again", status: 502 }
+  }
+
+  try {
+    return { data: JSON.parse(stripCodeFences(rawText)) }
+  } catch (parseErr) {
+    console.error("JSON parse failed:", parseErr, rawText.slice(0, 500))
+    return { error: "couldn't generate program, try again", status: 502 }
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders })
@@ -247,7 +367,53 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json()
-    const mode = body?.mode === "adaptive" ? "adaptive" : "initial"
+    const mode =
+      body?.mode === "adaptive"
+        ? "adaptive"
+        : body?.mode === "propose-substitution"
+          ? "propose-substitution"
+          : "initial"
+
+    const apiKey = Deno.env.get("ANTHROPIC_API_KEY")
+    if (!apiKey) {
+      return jsonResponse(
+        { error: "ANTHROPIC_API_KEY secret is not configured" },
+        500,
+      )
+    }
+
+    if (mode === "propose-substitution") {
+      if (!body?.primary_exercise?.name) {
+        return jsonResponse(
+          { error: "propose-substitution requires primary_exercise" },
+          400,
+        )
+      }
+
+      const result = await callAnthropic(
+        apiKey,
+        PROPOSE_SYSTEM_PROMPT,
+        buildProposeUserPrompt(body),
+        1500,
+      )
+      if (result.error) {
+        return jsonResponse({ error: result.error }, result.status ?? 502)
+      }
+
+      if (!validateProposal(result.data)) {
+        console.error(
+          "Proposal failed validation:",
+          JSON.stringify(result.data).slice(0, 500),
+        )
+        return jsonResponse(
+          { error: "couldn't generate proposal, try again" },
+          502,
+        )
+      }
+
+      return jsonResponse({ proposal: result.data })
+    }
+
     const {
       goal,
       experience_level,
@@ -281,14 +447,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY")
-    if (!apiKey) {
-      return jsonResponse(
-        { error: "ANTHROPIC_API_KEY secret is not configured" },
-        500,
-      )
-    }
-
     const system =
       mode === "adaptive" ? ADAPTIVE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT
     const userPrompt =
@@ -296,54 +454,12 @@ Deno.serve(async (req) => {
         ? buildAdaptiveUserPrompt(body)
         : buildInitialUserPrompt(body)
 
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-5",
-        max_tokens: 8000,
-        system,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    })
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text()
-      console.error("Anthropic error:", anthropicRes.status, errText)
-      return jsonResponse(
-        { error: "couldn't generate program, try again" },
-        502,
-      )
+    const result = await callAnthropic(apiKey, system, userPrompt, 8000)
+    if (result.error) {
+      return jsonResponse({ error: result.error }, result.status ?? 502)
     }
 
-    const anthropicJson = await anthropicRes.json()
-    const rawText =
-      anthropicJson?.content
-        ?.filter((block: { type: string }) => block.type === "text")
-        ?.map((block: { text: string }) => block.text)
-        ?.join("\n") ?? ""
-
-    if (!rawText) {
-      return jsonResponse(
-        { error: "couldn't generate program, try again" },
-        502,
-      )
-    }
-
-    let program
-    try {
-      program = JSON.parse(stripCodeFences(rawText))
-    } catch (parseErr) {
-      console.error("JSON parse failed:", parseErr, rawText.slice(0, 500))
-      return jsonResponse(
-        { error: "couldn't generate program, try again" },
-        502,
-      )
-    }
+    const program = result.data
 
     // Normalize week_number for adaptive if model drifts slightly.
     if (

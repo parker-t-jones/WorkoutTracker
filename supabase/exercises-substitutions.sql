@@ -28,6 +28,11 @@ create index if not exists idx_substitutions_primary
 alter table public.substitutions enable row level security;
 
 drop policy if exists substitutions_select_authenticated on public.substitutions;
+drop policy if exists substitutions_insert_authenticated on public.substitutions;
 create policy substitutions_select_authenticated on public.substitutions
   for select to authenticated
   using (true);
+
+create policy substitutions_insert_authenticated on public.substitutions
+  for insert to authenticated
+  with check (true);

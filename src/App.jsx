@@ -9,6 +9,7 @@ import TabBar from './components/TabBar'
 import AuthScreen from './components/AuthScreen'
 import AccountView from './components/AccountView'
 import WeekAdaptationSummary from './components/WeekAdaptationSummary'
+import ProposedSubstitutionsView from './components/ProposedSubstitutionsView'
 import { supabase } from './lib/supabase'
 import {
   loadProgramData,
@@ -47,7 +48,7 @@ export default function App() {
   const [userId, setUserId] = useState(null)
   const [logs, setLogs] = useState([])
 
-  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | workout | log | week-summary
+  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | workout | log | week-summary | proposals
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
   const [editLogId, setEditLogId] = useState(null)
@@ -458,6 +459,12 @@ export default function App() {
     )
   }
 
+  if (view === 'proposals') {
+    return (
+      <ProposedSubstitutionsView onBack={() => setView('account')} />
+    )
+  }
+
   const scheduled =
     scheduledId != null ? getScheduledBundle(scheduledId) : null
 
@@ -539,7 +546,11 @@ export default function App() {
       ) : view === 'leaderboard' ? (
         <LeaderboardView currentUserId={userId ?? session.user.id} />
       ) : view === 'account' ? (
-        <AccountView email={session.user.email} onSignOut={handleSignOut} />
+        <AccountView
+          email={session.user.email}
+          onSignOut={handleSignOut}
+          onOpenProposals={() => setView('proposals')}
+        />
       ) : (
         <CalendarView
           scheduledWorkouts={calendarScheduled}

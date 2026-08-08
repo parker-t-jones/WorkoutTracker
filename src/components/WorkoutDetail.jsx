@@ -64,31 +64,19 @@ export default function WorkoutDetail({
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           {workout.focus}
         </h1>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span
-            className={[
-              'inline-block rounded px-2 py-0.5 text-xs font-medium',
-              allDone
-                ? 'bg-emerald-100 text-emerald-800'
-                : 'bg-amber-100 text-amber-800',
-            ].join(' ')}
-          >
-            {allDone ? 'completed' : status}
-          </span>
-          <span className="font-mono text-xs text-muted">
-            {loggedSets}/{totalSets} sets logged
-          </span>
-        </div>
+        <p className="mt-2 font-mono text-xs text-muted">
+          {loggedSets}/{totalSets} sets logged
+        </p>
       </header>
 
       {(justCompleted || allDone) && (
-        <p className="mb-4 rounded bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+        <p className="mb-4 rounded border border-success-border/55 bg-surface-alt px-3 py-3 text-sm text-success">
           Workout complete — nice work. Tap any set to edit.
         </p>
       )}
 
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-red-300">
+        <p role="alert" className="mb-4 text-sm text-danger">
           {error}
         </p>
       ) : null}
@@ -126,7 +114,7 @@ export default function WorkoutDetail({
                   ) : null}
                   {count > 0 && (
                     <div className="mt-2 space-y-1.5">
-                      <div className="text-xs text-emerald-700">
+                      <div className="text-xs text-success/85">
                         Logged {Math.min(count, we.sets)}/{we.sets} sets
                       </div>
                       <div className="flex flex-wrap gap-1.5">
@@ -137,12 +125,12 @@ export default function WorkoutDetail({
                             onClick={() =>
                               onLogExercise(we.id, { editLogId: l.id })
                             }
-                            className="rounded bg-emerald-50 px-2 py-1 font-mono text-xs tabular-nums text-emerald-900 ring-1 ring-emerald-100 hover:bg-emerald-100"
+                            className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success hover:border-success-border hover:text-ink"
                             aria-label={`Edit set ${l.set_number}`}
                           >
                             #{l.set_number}: {l.actual_reps}
                             {l.actual_weight != null
-                              ? `@${l.actual_weight}`
+                              ? `x${l.actual_weight}`
                               : ''}
                           </button>
                         ))}
@@ -175,12 +163,7 @@ export default function WorkoutDetail({
                   <button
                     type="button"
                     onClick={() => onLogExercise(we.id)}
-                    className={[
-                      'rounded px-3 py-1.5 text-sm font-medium',
-                      exerciseDone
-                        ? 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
-                        : 'bg-orange text-bg hover:bg-orange-dim',
-                    ].join(' ')}
+                    className="rounded bg-orange px-3 py-1.5 text-sm font-medium text-on-orange hover:bg-orange-dim"
                   >
                     {exerciseDone ? 'Edit' : count > 0 ? 'Continue' : 'Log'}
                   </button>
@@ -193,8 +176,8 @@ export default function WorkoutDetail({
                       className={[
                         'rounded px-2 py-1.5 text-center text-xs font-medium',
                         hasPain || painOpen
-                          ? 'bg-white/15 text-ink ring-1 ring-white/20'
-                          : 'bg-white/10 text-muted hover:bg-white/15 hover:text-ink',
+                          ? 'bg-ink/15 text-ink ring-1 ring-ink/20'
+                          : 'bg-ink/10 text-muted hover:bg-ink/15 hover:text-ink',
                       ].join(' ')}
                       aria-expanded={painOpen}
                       aria-label={
@@ -225,7 +208,7 @@ export default function WorkoutDetail({
                       type="button"
                       disabled={savingThis}
                       onClick={() => savePain(we.id, true)}
-                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-bg hover:bg-orange-dim disabled:opacity-60"
+                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-on-orange hover:bg-orange-dim disabled:opacity-60"
                     >
                       {savingThis ? 'Saving…' : hasPain ? 'Update note' : 'Save'}
                     </button>

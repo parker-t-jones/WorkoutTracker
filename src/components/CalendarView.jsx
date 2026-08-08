@@ -134,7 +134,7 @@ export default function CalendarView({
               {generateNextWeekError ? (
                 <p
                   role="alert"
-                  className="mt-2 rounded bg-red-950/60 px-3 py-2 text-sm text-red-300"
+                  className="mt-2 rounded bg-danger-bg px-3 py-2 text-sm text-danger"
                 >
                   {generateNextWeekError}
                 </p>
@@ -143,7 +143,7 @@ export default function CalendarView({
                 type="button"
                 onClick={onGenerateNextWeek}
                 disabled={generatingNextWeek}
-                className="mt-3 w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim disabled:pointer-events-none disabled:opacity-60"
+                className="mt-3 w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim disabled:pointer-events-none disabled:opacity-60"
               >
                 Generate next week
               </button>

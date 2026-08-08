@@ -57,7 +57,7 @@ export default function LeaderboardView({ currentUserId }) {
               className={[
                 'flex-1 rounded py-2 text-sm font-medium',
                 selected
-                  ? 'bg-orange text-bg'
+                  ? 'bg-orange text-on-orange'
                   : 'bg-surface text-muted ring-1 ring-orange-dim/50 hover:bg-surface-alt hover:text-ink',
               ].join(' ')}
             >
@@ -73,7 +73,7 @@ export default function LeaderboardView({ currentUserId }) {
         <div className="space-y-3">
           <p
             role="alert"
-            className="rounded bg-red-950/60 px-3 py-3 text-sm text-red-300"
+            className="rounded bg-danger-bg px-3 py-3 text-sm text-danger"
           >
             {error}
           </p>

@@ -142,7 +142,7 @@ export default function WeekAdaptationSummary({
       <button
         type="button"
         onClick={onDismiss}
-        className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim"
+        className="w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim"
       >
         Got it — back to calendar
       </button>

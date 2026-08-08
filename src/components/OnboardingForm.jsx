@@ -152,7 +152,7 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
         {error && !submitting ? (
           <p
             role="alert"
-            className="rounded bg-red-950/60 px-3 py-2 text-sm text-red-300"
+            className="rounded bg-danger-bg px-3 py-2 text-sm text-danger"
           >
             {error}
           </p>
@@ -178,7 +178,7 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
           type="submit"
           disabled={submitting}
           aria-disabled={submitting}
-          className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60"
         >
           {submitting ? 'Generating…' : 'Generate my program'}
         </button>

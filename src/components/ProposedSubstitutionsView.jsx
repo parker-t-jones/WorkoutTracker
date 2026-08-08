@@ -97,8 +97,8 @@ export default function ProposedSubstitutionsView({ onBack }) {
           className={[
             'mb-4 rounded px-3 py-2 text-sm',
             banner.type === 'ok'
-              ? 'bg-emerald-50 text-emerald-900'
-              : 'bg-red-950/60 text-red-300',
+              ? 'border border-success-border/55 bg-surface-alt text-success'
+              : 'bg-danger-bg text-danger',
           ].join(' ')}
         >
           {banner.text}
@@ -106,7 +106,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
       ) : null}
 
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-red-300">
+        <p role="alert" className="mb-4 text-sm text-danger">
           {error}
         </p>
       ) : null}
@@ -168,7 +168,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
                         type="button"
                         disabled={busy}
                         onClick={() => handleReject(row.id)}
-                        className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-bg disabled:opacity-60"
+                        className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-on-orange disabled:opacity-60"
                       >
                         {busy ? 'Saving…' : 'Confirm reject'}
                       </button>
@@ -191,7 +191,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
                       type="button"
                       disabled={busy}
                       onClick={() => handleApprove(row.id)}
-                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-bg disabled:opacity-60"
+                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-on-orange disabled:opacity-60"
                     >
                       {busy ? 'Saving…' : 'Approve'}
                     </button>

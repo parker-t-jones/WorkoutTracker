@@ -13,6 +13,7 @@ import {
   currentWeekRange,
   weightProgressByExercise,
 } from '../lib/progress'
+import { readThemeVars } from '../lib/theme'
 
 function formatShortDate(dateKey) {
   const [, m, d] = dateKey.split('-')
@@ -35,7 +36,22 @@ function AdherenceCard({ label, stats }) {
   )
 }
 
+function useChartColors() {
+  const [colors, setColors] = useState(() => readThemeVars())
+
+  useEffect(() => {
+    function refresh() {
+      setColors(readThemeVars())
+    }
+    document.addEventListener('wt-themechange', refresh)
+    return () => document.removeEventListener('wt-themechange', refresh)
+  }, [])
+
+  return colors
+}
+
 export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }) {
+  const chart = useChartColors()
   const weekStats = useMemo(
     () => adherenceFor(scheduledWorkouts, currentWeekRange()),
     [scheduledWorkouts],
@@ -111,24 +127,27 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
                     data={selected.points}
                     margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
                   >
-                    <CartesianGrid stroke="#262220" strokeDasharray="3 3" />
+                    <CartesianGrid
+                      stroke={chart.surfaceAlt}
+                      strokeDasharray="3 3"
+                    />
                     <XAxis
                       dataKey="date"
                       tickFormatter={formatShortDate}
-                      tick={{ fontSize: 11, fill: '#948F86' }}
+                      tick={{ fontSize: 11, fill: chart.textMuted }}
                     />
                     <YAxis
-                      tick={{ fontSize: 11, fill: '#948F86' }}
+                      tick={{ fontSize: 11, fill: chart.textMuted }}
                       width={40}
                       domain={['auto', 'auto']}
                       unit=""
                     />
                     <Tooltip
                       contentStyle={{
-                        background: '#1D1A17',
-                        border: '1px solid #B8431A',
+                        background: chart.surface,
+                        border: `1px solid ${chart.orangeDim}`,
                         borderRadius: 6,
-                        color: '#F5F1EA',
+                        color: chart.text,
                       }}
                       formatter={(value) => [`${value} lb`, 'Top set']}
                       labelFormatter={(label) => formatShortDate(label)}
@@ -136,9 +155,9 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
                     <Line
                       type="monotone"
                       dataKey="weight"
-                      stroke="#FF5A1F"
+                      stroke={chart.orange}
                       strokeWidth={2}
-                      dot={{ r: 3, fill: '#FF5A1F' }}
+                      dot={{ r: 3, fill: chart.orange }}
                     />
                   </LineChart>
                 </ResponsiveContainer>

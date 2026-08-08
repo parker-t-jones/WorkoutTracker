@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
 import { countPendingProposals } from '../lib/proposals'
+import {
+  getStoredPreference,
+  resolveTheme,
+  setThemePreference,
+} from '../lib/theme'
 
 export default function AccountView({
   email,
@@ -7,6 +12,7 @@ export default function AccountView({
   onOpenProposals,
 }) {
   const [pendingCount, setPendingCount] = useState(null)
+  const [theme, setTheme] = useState(() => resolveTheme())
 
   useEffect(() => {
     let cancelled = false
@@ -22,6 +28,19 @@ export default function AccountView({
     }
   }, [])
 
+  useEffect(() => {
+    function onThemeChange(e) {
+      setTheme(e.detail)
+    }
+    document.addEventListener('wt-themechange', onThemeChange)
+    return () => document.removeEventListener('wt-themechange', onThemeChange)
+  }, [])
+
+  function chooseTheme(next) {
+    setThemePreference(next)
+    setTheme(next)
+  }
+
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <header className="mb-6">
@@ -35,6 +54,41 @@ export default function AccountView({
           Signed in as
         </div>
         <div className="mt-1 text-sm font-medium">{email || '—'}</div>
+      </div>
+
+      <div className="mt-4 rounded border border-orange-dim/40 bg-surface px-4 py-4">
+        <div className="text-xs uppercase tracking-wide text-muted">
+          Appearance
+        </div>
+        <p className="mt-1 text-sm text-muted">
+          {getStoredPreference()
+            ? 'Your choice is saved on this device.'
+            : 'Following your system preference until you choose.'}
+        </p>
+        <div className="mt-3 flex gap-1">
+          {[
+            { id: 'dark', label: 'Dark' },
+            { id: 'light', label: 'Light' },
+          ].map((opt) => {
+            const selected = theme === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => chooseTheme(opt.id)}
+                className={[
+                  'flex-1 rounded py-2 text-sm font-medium',
+                  selected
+                    ? 'bg-orange text-on-orange'
+                    : 'bg-surface-alt text-muted ring-1 ring-orange-dim/40 hover:text-ink',
+                ].join(' ')}
+                aria-pressed={selected}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <button

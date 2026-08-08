@@ -8,6 +8,11 @@
   --color-orange-dim: var(--orange-dim);
   --color-ink: var(--text);
   --color-muted: var(--text-muted);
+  --color-on-orange: var(--on-orange);
+  --color-success: var(--success);
+  --color-success-border: var(--success-border);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Oswald", ui-sans-serif, system-ui, sans-serif;
@@ -21,7 +26,9 @@
   --radius-3xl: 0.375rem;
 }
 
-:root {
+/* Dark mode (default) — values unchanged from prior theme pass */
+:root,
+[data-theme="dark"] {
   --bg: #121110;
   --surface: #1d1a17;
   --surface-alt: #262220;
@@ -29,15 +36,74 @@
   --orange-dim: #b8431a;
   --text: #f5f1ea;
   --text-muted: #948f86;
+  --on-orange: #121110;
+  --success: #86b895;
+  --success-border: #2f5c40;
+  --danger: #fca5a5;
+  --danger-bg: rgb(69 10 10 / 0.6);
+  --hazard-band: #0a0908;
+  --hex-color: var(--orange-dim);
+  --hex-opacity: 0.09;
+  --hex-size: 132px 231px;
+}
+
+[data-theme="light"] {
+  --bg: #f5f1ea;
+  --surface: #fcfaf6;
+  --surface-alt: #ede8de;
+  --orange: #c94a1a;
+  --orange-dim: #d97b45;
+  --text: #1c1917;
+  --text-muted: #6b6560;
+  --on-orange: #121110;
+  /* Deeper green for contrast on cream surfaces */
+  --success: #1f6b3a;
+  --success-border: #1f6b3a;
+  --danger: #b91c1c;
+  --danger-bg: #fef2f2;
+  --hazard-band: #1c1917;
+  --hex-color: var(--orange-dim);
+  --hex-opacity: 0.09;
+  --hex-size: 132px 231px;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-sans);
   background: var(--bg);
   color: var(--text);
   accent-color: var(--orange);
+}
+
+/* Subtle hex rubber-tile texture — seamless tile, hairline stroke */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--hex-opacity);
+  background-color: var(--hex-color);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='49' viewBox='0 0 28 49'%3E%3Cg fill='none' stroke='%23000' stroke-width='0.4' stroke-linejoin='round' stroke-linecap='butt'%3E%3Cpath d='M13.99 9.25l13 7.5v15l-13 7.5L1 31.75v-15z'/%3E%3Cpath d='M0 15l12.98-7.5V0'/%3E%3Cpath d='M0 33.5l12.98 7.5V49'/%3E%3Cpath d='M15 0v7.5L27.99 15'/%3E%3Cpath d='M15 49v-8l12.99-7.5'/%3E%3C/g%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='49' viewBox='0 0 28 49'%3E%3Cg fill='none' stroke='%23000' stroke-width='0.4' stroke-linejoin='round' stroke-linecap='butt'%3E%3Cpath d='M13.99 9.25l13 7.5v15l-13 7.5L1 31.75v-15z'/%3E%3Cpath d='M0 15l12.98-7.5V0'/%3E%3Cpath d='M0 33.5l12.98 7.5V49'/%3E%3Cpath d='M15 0v7.5L27.99 15'/%3E%3Cpath d='M15 49v-8l12.99-7.5'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-size: var(--hex-size);
+  mask-size: var(--hex-size);
+  -webkit-mask-repeat: repeat;
+  mask-repeat: repeat;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Reserve space for fixed bottom tab bar + iOS home indicator */
+.pb-tab-bar {
+  padding-bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));
 }
 
 h1,
@@ -62,6 +128,6 @@ h3,
   background: repeating-linear-gradient(
     -45deg,
     var(--orange) 0 7px,
-    #0a0908 7px 14px
+    var(--hazard-band) 7px 14px
   );
 }

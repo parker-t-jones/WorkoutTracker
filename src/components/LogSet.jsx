@@ -98,7 +98,7 @@ function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
               className={[
                 'h-11 rounded text-sm font-semibold tabular-nums active:scale-[0.98]',
                 selected
-                  ? 'bg-orange text-bg'
+                  ? 'bg-orange text-on-orange'
                   : 'bg-surface text-ink ring-1 ring-orange-dim/50 hover:bg-surface-alt',
                 saving ? 'opacity-60' : '',
               ].join(' ')}
@@ -178,7 +178,7 @@ function SetForm({
       </div>
 
       {error ? (
-        <p role="alert" className="text-sm text-red-300">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       ) : null}
@@ -187,7 +187,7 @@ function SetForm({
         type="button"
         onClick={onPrimary}
         disabled={saving}
-        className="w-full rounded bg-orange py-4 text-base font-medium text-bg hover:bg-orange-dim disabled:opacity-60"
+        className="w-full rounded bg-orange py-4 text-base font-medium text-on-orange hover:bg-orange-dim disabled:opacity-60"
       >
         {saving ? 'Saving…' : primaryLabel}
       </button>
@@ -398,7 +398,7 @@ export default function LogSet({
                 <span className="font-mono">Set {l.set_number}</span>
                 <span className="font-mono tabular-nums text-ink">
                   {l.actual_reps} reps
-                  {l.actual_weight != null ? ` @ ${l.actual_weight}` : ''}
+                  {l.actual_weight != null ? ` x ${l.actual_weight}` : ''}
                   <span className="ml-2 font-sans text-xs text-muted">Edit</span>
                 </span>
               </button>
@@ -422,7 +422,7 @@ export default function LogSet({
         />
       ) : done ? (
         <div className="space-y-3">
-          <p className="rounded bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+          <p className="rounded border border-success-border/55 bg-surface-alt px-3 py-3 text-sm text-success">
             All {workoutExercise.sets} sets logged — tap a set above to edit.
           </p>
 
@@ -451,7 +451,7 @@ export default function LogSet({
           )}
 
           {error && !editingLog ? (
-            <p role="alert" className="text-sm text-red-300">
+            <p role="alert" className="text-sm text-danger">
               {error}
             </p>
           ) : null}
@@ -459,7 +459,7 @@ export default function LogSet({
           <button
             type="button"
             onClick={onBack}
-            className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim"
+            className="w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim"
           >
             Back to workout
           </button>

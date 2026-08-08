@@ -404,7 +404,7 @@ export default function App() {
 
   if (loadError) {
     return (
-      <div className="mx-auto max-w-lg px-4 py-16 text-center text-red-300">
+      <div className="mx-auto max-w-lg px-4 py-16 text-center text-danger">
         {loadError}
       </div>
     )
@@ -526,6 +526,33 @@ export default function App() {
 
   return (
     <>
+      <div className="pb-tab-bar">
+        {view === 'progress' ? (
+          <ProgressView
+            scheduledWorkouts={scheduledWorkouts}
+            workoutDetails={workoutDetails}
+            logs={logs}
+          />
+        ) : view === 'leaderboard' ? (
+          <LeaderboardView currentUserId={userId ?? session.user.id} />
+        ) : view === 'account' ? (
+          <AccountView
+            email={session.user.email}
+            onSignOut={handleSignOut}
+            onOpenProposals={() => setView('proposals')}
+          />
+        ) : (
+          <CalendarView
+            scheduledWorkouts={calendarScheduled}
+            getWorkout={getWorkout}
+            onSelectScheduled={openWorkout}
+            canGenerateNextWeek={nextWeekEligibility.ready}
+            onGenerateNextWeek={handleGenerateNextWeek}
+            generatingNextWeek={generatingNextWeek}
+            generateNextWeekError={nextWeekError}
+          />
+        )}
+      </div>
       <TabBar
         active={topTab}
         onChange={(tab) => {
@@ -537,31 +564,6 @@ export default function App() {
           setJustCompleted(false)
         }}
       />
-      {view === 'progress' ? (
-        <ProgressView
-          scheduledWorkouts={scheduledWorkouts}
-          workoutDetails={workoutDetails}
-          logs={logs}
-        />
-      ) : view === 'leaderboard' ? (
-        <LeaderboardView currentUserId={userId ?? session.user.id} />
-      ) : view === 'account' ? (
-        <AccountView
-          email={session.user.email}
-          onSignOut={handleSignOut}
-          onOpenProposals={() => setView('proposals')}
-        />
-      ) : (
-        <CalendarView
-          scheduledWorkouts={calendarScheduled}
-          getWorkout={getWorkout}
-          onSelectScheduled={openWorkout}
-          canGenerateNextWeek={nextWeekEligibility.ready}
-          onGenerateNextWeek={handleGenerateNextWeek}
-          generatingNextWeek={generatingNextWeek}
-          generateNextWeekError={nextWeekError}
-        />
-      )}
     </>
   )
 }

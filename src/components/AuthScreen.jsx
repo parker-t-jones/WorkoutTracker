@@ -129,14 +129,14 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         {error ? (
           <p
             role="alert"
-            className="rounded bg-red-950/60 px-3 py-2 text-sm text-red-300"
+            className="rounded bg-danger-bg px-3 py-2 text-sm text-danger"
           >
             {error}
           </p>
         ) : null}
 
         {info ? (
-          <p className="rounded bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <p className="rounded border border-success-border/55 bg-surface-alt px-3 py-2 text-sm text-success">
             {info}
           </p>
         ) : null}
@@ -144,7 +144,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim disabled:cursor-not-allowed disabled:opacity-60"
         >
           {busy
             ? 'Please wait…'

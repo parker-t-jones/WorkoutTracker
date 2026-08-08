@@ -76,16 +76,16 @@ export default function ProposedSubstitutionsView({ onBack }) {
       <button
         type="button"
         onClick={onBack}
-        className="mb-4 text-sm text-stone-600 hover:text-stone-900"
+        className="mb-4 text-sm text-muted hover:text-ink"
       >
         ← Account
       </button>
 
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
           Substitution proposals
         </h1>
-        <p className="mt-2 text-sm text-stone-600">
+        <p className="mt-2 text-sm text-muted">
           AI suggestions from skip/fallback cases. Nothing here reaches a live
           workout until you approve it into the vetted table.
         </p>
@@ -95,10 +95,10 @@ export default function ProposedSubstitutionsView({ onBack }) {
         <p
           role="status"
           className={[
-            'mb-4 rounded-md px-3 py-2 text-sm',
+            'mb-4 rounded px-3 py-2 text-sm',
             banner.type === 'ok'
               ? 'bg-emerald-50 text-emerald-900'
-              : 'bg-red-50 text-red-800',
+              : 'bg-red-950/60 text-red-300',
           ].join(' ')}
         >
           {banner.text}
@@ -106,15 +106,15 @@ export default function ProposedSubstitutionsView({ onBack }) {
       ) : null}
 
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-red-700">
+        <p role="alert" className="mb-4 text-sm text-red-300">
           {error}
         </p>
       ) : null}
 
       {loading ? (
-        <p className="text-sm text-stone-500">Loading…</p>
+        <p className="text-sm text-muted">Loading…</p>
       ) : rows.length === 0 ? (
-        <p className="rounded-md border border-stone-200 bg-white px-3 py-4 text-sm text-stone-600">
+        <p className="rounded border border-orange-dim/40 bg-surface px-3 py-4 text-sm text-muted">
           No pending proposals.
         </p>
       ) : (
@@ -131,35 +131,35 @@ export default function ProposedSubstitutionsView({ onBack }) {
             return (
               <li
                 key={row.id}
-                className="rounded-md border border-stone-200 bg-white px-3 py-3"
+                className="rounded border border-orange-dim/40 bg-surface px-3 py-3"
               >
-                <div className="text-xs text-stone-400">
+                <div className="font-mono text-xs text-muted">
                   {new Date(row.created_at).toLocaleString()}
                 </div>
-                <div className="mt-1 text-sm font-medium text-stone-900">
+                <div className="mt-1 font-display text-sm font-medium text-ink">
                   {primaryName}
-                  <span className="font-normal text-stone-500"> → </span>
+                  <span className="font-sans font-normal text-muted"> → </span>
                   {subLabel}
                   {isNew ? (
-                    <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900 ring-1 ring-amber-200">
+                    <span className="ml-2 rounded bg-amber-50 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-amber-900 ring-1 ring-amber-200">
                       new exercise
                     </span>
                   ) : null}
                 </div>
-                <div className="mt-1 text-xs font-medium text-stone-500">
+                <div className="mt-1 text-xs font-medium text-muted">
                   {row.reason_tag?.replaceAll('_', ' ')}
                 </div>
-                <p className="mt-2 text-sm text-stone-700">{row.reasoning}</p>
+                <p className="mt-2 text-sm text-ink">{row.reasoning}</p>
 
                 {rejectDraftId === row.id ? (
-                  <div className="mt-3 space-y-2 border-t border-stone-100 pt-3">
-                    <label className="block text-xs text-stone-600">
+                  <div className="mt-3 space-y-2 border-t border-orange-dim/30 pt-3">
+                    <label className="block text-xs text-muted">
                       Rejection note (optional)
                       <textarea
                         value={rejectNote}
                         onChange={(e) => setRejectNote(e.target.value)}
                         rows={2}
-                        className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm"
+                        className="mt-1 w-full rounded border border-orange-dim/50 bg-bg px-2 py-1.5 text-sm text-ink"
                         placeholder="Why this pairing is wrong…"
                       />
                     </label>
@@ -168,7 +168,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
                         type="button"
                         disabled={busy}
                         onClick={() => handleReject(row.id)}
-                        className="rounded-md bg-stone-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                        className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-bg disabled:opacity-60"
                       >
                         {busy ? 'Saving…' : 'Confirm reject'}
                       </button>
@@ -179,7 +179,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
                           setRejectDraftId(null)
                           setRejectNote('')
                         }}
-                        className="rounded-md px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
+                        className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt hover:text-ink"
                       >
                         Cancel
                       </button>
@@ -191,7 +191,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
                       type="button"
                       disabled={busy}
                       onClick={() => handleApprove(row.id)}
-                      className="rounded-md bg-stone-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-bg disabled:opacity-60"
                     >
                       {busy ? 'Saving…' : 'Approve'}
                     </button>
@@ -202,7 +202,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
                         setRejectDraftId(row.id)
                         setRejectNote('')
                       }}
-                      className="rounded-md px-3 py-1.5 text-xs text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50 disabled:opacity-60"
+                      className="rounded px-3 py-1.5 text-xs text-muted ring-1 ring-orange-dim/50 hover:bg-surface-alt hover:text-ink disabled:opacity-60"
                     >
                       Reject
                     </button>

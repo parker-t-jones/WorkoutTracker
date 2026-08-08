@@ -52,16 +52,18 @@ export default function WorkoutDetail({
       <button
         type="button"
         onClick={onBack}
-        className="mb-4 text-sm text-stone-600 hover:text-stone-900"
+        className="mb-4 text-sm text-muted hover:text-ink"
       >
         ← Calendar
       </button>
 
       <header className="mb-6">
-        <p className="text-sm text-stone-500">
+        <p className="font-display text-sm text-muted">
           Week {workout.week_number} · Day {workout.day_number} · {date}
         </p>
-        <h1 className="text-2xl font-semibold tracking-tight">{workout.focus}</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          {workout.focus}
+        </h1>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <span
             className={[
@@ -73,20 +75,20 @@ export default function WorkoutDetail({
           >
             {allDone ? 'completed' : status}
           </span>
-          <span className="text-xs text-stone-500">
+          <span className="font-mono text-xs text-muted">
             {loggedSets}/{totalSets} sets logged
           </span>
         </div>
       </header>
 
       {(justCompleted || allDone) && (
-        <p className="mb-4 rounded-md bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+        <p className="mb-4 rounded bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
           Workout complete — nice work. Tap any set to edit.
         </p>
       )}
 
       {error ? (
-        <p role="alert" className="mb-4 text-sm text-red-700">
+        <p role="alert" className="mb-4 text-sm text-red-300">
           {error}
         </p>
       ) : null}
@@ -106,21 +108,21 @@ export default function WorkoutDetail({
           return (
             <li
               key={we.id}
-              className="rounded-md border border-stone-200 bg-white px-3 py-3"
+              className="rounded border border-orange-dim/40 bg-surface px-3 py-3"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs text-stone-400">
+                  <div className="text-xs text-muted">
                     Exercise {index + 1}
                   </div>
-                  <div className="font-medium">
+                  <div className="font-display font-medium">
                     {we.exercise?.name ?? 'Exercise'}
                   </div>
-                  <div className="mt-1 text-sm text-stone-600">
+                  <div className="mt-1 text-sm text-muted">
                     {we.sets} × {we.reps} · {we.weight_guidance}
                   </div>
                   {we.notes ? (
-                    <div className="mt-1 text-sm text-stone-500">{we.notes}</div>
+                    <div className="mt-1 text-sm text-muted">{we.notes}</div>
                   ) : null}
                   {count > 0 && (
                     <div className="mt-2 space-y-1.5">
@@ -135,7 +137,7 @@ export default function WorkoutDetail({
                             onClick={() =>
                               onLogExercise(we.id, { editLogId: l.id })
                             }
-                            className="rounded bg-emerald-50 px-2 py-1 text-xs tabular-nums text-emerald-900 ring-1 ring-emerald-100 hover:bg-emerald-100"
+                            className="rounded bg-emerald-50 px-2 py-1 font-mono text-xs tabular-nums text-emerald-900 ring-1 ring-emerald-100 hover:bg-emerald-100"
                             aria-label={`Edit set ${l.set_number}`}
                           >
                             #{l.set_number}: {l.actual_reps}
@@ -151,7 +153,7 @@ export default function WorkoutDetail({
                           onClick={() =>
                             onLogExercise(we.id, { showRpe: true })
                           }
-                          className="text-xs text-stone-600 hover:text-stone-900"
+                          className="text-xs text-muted hover:text-ink"
                         >
                           {rpe != null
                             ? `RPE ${rpe} · tap to change`
@@ -169,7 +171,7 @@ export default function WorkoutDetail({
                     </div>
                   )}
                 </div>
-                <div className="flex shrink-0 flex-col items-end gap-2">
+                <div className="flex w-[5.75rem] shrink-0 flex-col items-stretch gap-2">
                   <button
                     type="button"
                     onClick={() => onLogExercise(we.id)}
@@ -177,7 +179,7 @@ export default function WorkoutDetail({
                       'rounded px-3 py-1.5 text-sm font-medium',
                       exerciseDone
                         ? 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
-                        : 'bg-stone-900 text-white hover:bg-stone-700',
+                        : 'bg-orange text-bg hover:bg-orange-dim',
                     ].join(' ')}
                   >
                     {exerciseDone ? 'Edit' : count > 0 ? 'Continue' : 'Log'}
@@ -189,10 +191,10 @@ export default function WorkoutDetail({
                         painOpen ? closePain() : openPain(we.id)
                       }
                       className={[
-                        'rounded px-2 py-1 text-xs',
+                        'rounded px-2 py-1.5 text-center text-xs font-medium',
                         hasPain || painOpen
-                          ? 'bg-amber-50 text-amber-900 ring-1 ring-amber-200'
-                          : 'text-stone-500 hover:bg-stone-100 hover:text-stone-800',
+                          ? 'bg-white/15 text-ink ring-1 ring-white/20'
+                          : 'bg-white/10 text-muted hover:bg-white/15 hover:text-ink',
                       ].join(' ')}
                       aria-expanded={painOpen}
                       aria-label={
@@ -206,8 +208,8 @@ export default function WorkoutDetail({
               </div>
 
               {painOpen ? (
-                <div className="mt-3 space-y-2 border-t border-stone-100 pt-3">
-                  <p className="text-xs text-stone-500">
+                <div className="mt-3 space-y-2 border-t border-orange-dim/30 pt-3">
+                  <p className="text-xs text-muted">
                     Optional — note where or what felt off. Not medical advice,
                     just for your log.
                   </p>
@@ -216,14 +218,14 @@ export default function WorkoutDetail({
                     onChange={(e) => setPainDraft(e.target.value)}
                     rows={2}
                     placeholder="e.g. left shoulder on the press"
-                    className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm focus:border-stone-500 focus:outline-none focus:ring-1 focus:ring-stone-500"
+                    className="w-full rounded border border-orange-dim/50 bg-bg px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
                   />
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       disabled={savingThis}
                       onClick={() => savePain(we.id, true)}
-                      className="rounded-md bg-stone-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-stone-700 disabled:opacity-60"
+                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-bg hover:bg-orange-dim disabled:opacity-60"
                     >
                       {savingThis ? 'Saving…' : hasPain ? 'Update note' : 'Save'}
                     </button>
@@ -232,7 +234,7 @@ export default function WorkoutDetail({
                         type="button"
                         disabled={savingThis}
                         onClick={() => savePain(we.id, false)}
-                        className="rounded-md px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100 disabled:opacity-60"
+                        className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt hover:text-ink disabled:opacity-60"
                       >
                         Clear
                       </button>
@@ -241,7 +243,7 @@ export default function WorkoutDetail({
                         type="button"
                         disabled={savingThis}
                         onClick={() => savePain(we.id, true)}
-                        className="rounded-md px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100 disabled:opacity-60"
+                        className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt hover:text-ink disabled:opacity-60"
                       >
                         Flag without note
                       </button>
@@ -249,7 +251,7 @@ export default function WorkoutDetail({
                     <button
                       type="button"
                       onClick={closePain}
-                      className="rounded-md px-3 py-1.5 text-xs text-stone-500 hover:bg-stone-100"
+                      className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt"
                     >
                       Close
                     </button>

@@ -1,9 +1,67 @@
 @import "tailwindcss";
 
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-orange: var(--orange);
+  --color-orange-dim: var(--orange-dim);
+  --color-ink: var(--text);
+  --color-muted: var(--text-muted);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Oswald", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.375rem;
+  --radius-xl: 0.375rem;
+  --radius-2xl: 0.375rem;
+  --radius-3xl: 0.375rem;
+}
+
+:root {
+  --bg: #121110;
+  --surface: #1d1a17;
+  --surface-alt: #262220;
+  --orange: #ff5a1f;
+  --orange-dim: #b8431a;
+  --text: #f5f1ea;
+  --text-muted: #948f86;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: #f5f5f4;
-  color: #1c1917;
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  accent-color: var(--orange);
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+/* Thin diagonal hazard stripe — active/in-progress workout card only */
+.hazard-stripe {
+  position: relative;
+  overflow: hidden;
+}
+
+.hazard-stripe::before {
+  content: "";
+  display: block;
+  height: 4px;
+  margin: -0.75rem -0.75rem 0.75rem;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--orange) 0 7px,
+    #0a0908 7px 14px
+  );
 }

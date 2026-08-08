@@ -65,8 +65,10 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
   return (
     <div className="mx-auto max-w-lg px-4 py-12">
       <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="mt-2 text-sm text-stone-600">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          {title}
+        </h1>
+        <p className="mt-2 text-sm text-muted">
           {mode === 'signup'
             ? 'Email and password — one account per person.'
             : mode === 'forgot'
@@ -87,7 +89,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-md border border-stone-300 bg-white px-3 py-2"
+              className="w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-ink placeholder:text-muted"
             />
           </label>
         )}
@@ -104,7 +106,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
               minLength={6}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-md border border-stone-300 bg-white px-3 py-2"
+              className="w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-ink"
             />
           </label>
         )}
@@ -119,19 +121,22 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
               minLength={6}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              className="w-full rounded-md border border-stone-300 bg-white px-3 py-2"
+              className="w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-ink"
             />
           </label>
         )}
 
         {error ? (
-          <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
+          <p
+            role="alert"
+            className="rounded bg-red-950/60 px-3 py-2 text-sm text-red-300"
+          >
             {error}
           </p>
         ) : null}
 
         {info ? (
-          <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          <p className="rounded bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
             {info}
           </p>
         ) : null}
@@ -139,7 +144,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-md bg-stone-900 py-3 text-sm font-medium text-white hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim disabled:cursor-not-allowed disabled:opacity-60"
         >
           {busy
             ? 'Please wait…'
@@ -153,12 +158,12 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         </button>
       </form>
 
-      <div className="mt-6 space-y-2 text-center text-sm text-stone-600">
+      <div className="mt-6 space-y-2 text-center text-sm text-muted">
         {mode === 'login' && (
           <>
             <button
               type="button"
-              className="underline"
+              className="underline hover:text-ink"
               onClick={() => {
                 setMode('forgot')
                 setError(null)
@@ -171,7 +176,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
               No account?{' '}
               <button
                 type="button"
-                className="underline"
+                className="underline hover:text-ink"
                 onClick={() => {
                   setMode('signup')
                   setError(null)
@@ -186,7 +191,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         {mode === 'signup' && (
           <button
             type="button"
-            className="underline"
+            className="underline hover:text-ink"
             onClick={() => {
               setMode('login')
               setError(null)
@@ -199,7 +204,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         {mode === 'forgot' && (
           <button
             type="button"
-            className="underline"
+            className="underline hover:text-ink"
             onClick={() => {
               setMode('login')
               setError(null)

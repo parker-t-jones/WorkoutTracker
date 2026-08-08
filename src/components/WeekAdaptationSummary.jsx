@@ -24,18 +24,18 @@ export default function WeekAdaptationSummary({
   return (
     <div className="mx-auto max-w-lg px-4 py-8">
       <header className="mb-6">
-        <p className="text-sm text-stone-500">Week {weekNumber} ready</p>
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <p className="text-sm text-muted">Week {weekNumber} ready</p>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
           What changed for next week
         </h1>
-        <p className="mt-2 text-sm text-stone-600">
+        <p className="mt-2 text-sm text-muted">
           Based on last week&apos;s logs — no action needed, just a heads-up.
         </p>
       </header>
 
       {substituted.length > 0 ? (
-        <section className="mb-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
-          <h2 className="text-sm font-semibold text-amber-950">
+        <section className="mb-5 rounded border border-amber-200 bg-amber-50 px-3 py-3">
+          <h2 className="font-display text-sm font-semibold text-amber-950">
             Felt off — swapped from vetted list
           </h2>
           <p className="mt-1 text-xs text-amber-900/80">
@@ -67,22 +67,22 @@ export default function WeekAdaptationSummary({
       ) : null}
 
       {skipped.length > 0 ? (
-        <section className="mb-5 rounded-md border border-stone-300 bg-stone-100 px-3 py-3">
-          <h2 className="text-sm font-semibold text-stone-900">
+        <section className="mb-5 rounded border border-orange-dim/50 bg-surface-alt px-3 py-3">
+          <h2 className="font-display text-sm font-semibold text-ink">
             Skipped — no safe substitute
           </h2>
-          <p className="mt-1 text-xs text-stone-600">
+          <p className="mt-1 text-xs text-muted">
             Every vetted alternate still carried the same strain tag (or
             needed unavailable equipment), so the movement is omitted/deloaded
             this week instead of forcing a bad swap.
           </p>
           <ul className="mt-3 space-y-2">
             {skipped.map((d) => (
-              <li key={d.name} className="text-sm text-stone-900">
+              <li key={d.name} className="text-sm text-ink">
                 <div className="font-medium">{d.name}</div>
-                <div className="text-xs text-stone-600">{d.reason}</div>
+                <div className="text-xs text-muted">{d.reason}</div>
                 {d.pain_note ? (
-                  <div className="mt-0.5 text-xs text-stone-500">
+                  <div className="mt-0.5 text-xs text-muted">
                     Note: {d.pain_note}
                   </div>
                 ) : null}
@@ -94,20 +94,22 @@ export default function WeekAdaptationSummary({
 
       {changed.length > 0 ? (
         <section className="mb-5 space-y-2">
-          <h2 className="text-sm font-medium text-stone-700">Adjustments</h2>
+          <h2 className="font-display text-sm font-medium text-ink">
+            Adjustments
+          </h2>
           <ul className="space-y-2">
             {changed.map((d) => (
               <li
                 key={d.name}
-                className="rounded-md border border-stone-200 bg-white px-3 py-2"
+                className="rounded border border-orange-dim/40 bg-surface px-3 py-2"
               >
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-sm font-medium">{d.name}</span>
-                  <span className="shrink-0 text-xs font-medium text-stone-500">
+                  <span className="shrink-0 text-xs font-medium text-muted">
                     {DECISION_LABELS[d.decision] ?? d.decision}
                   </span>
                 </div>
-                <p className="mt-0.5 text-xs text-stone-500">{d.reason}</p>
+                <p className="mt-0.5 text-xs text-muted">{d.reason}</p>
               </li>
             ))}
           </ul>
@@ -115,14 +117,14 @@ export default function WeekAdaptationSummary({
       ) : null}
 
       {held.length > 0 ? (
-        <details className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-3 py-2">
-          <summary className="cursor-pointer text-sm text-stone-600">
+        <details className="mb-6 rounded border border-orange-dim/40 bg-surface-alt px-3 py-2">
+          <summary className="cursor-pointer text-sm text-muted">
             {held.length} exercise{held.length === 1 ? '' : 's'} held steady
           </summary>
-          <ul className="mt-2 space-y-1.5 border-t border-stone-200 pt-2">
+          <ul className="mt-2 space-y-1.5 border-t border-orange-dim/30 pt-2">
             {held.map((d) => (
-              <li key={d.name} className="text-xs text-stone-600">
-                <span className="font-medium text-stone-800">{d.name}</span>
+              <li key={d.name} className="text-xs text-muted">
+                <span className="font-medium text-ink">{d.name}</span>
                 {' — '}
                 {d.reason}
               </li>
@@ -132,7 +134,7 @@ export default function WeekAdaptationSummary({
       ) : null}
 
       {decisions.length === 0 ? (
-        <p className="mb-6 text-sm text-stone-600">
+        <p className="mb-6 text-sm text-muted">
           Next week is ready. No per-exercise changes to highlight.
         </p>
       ) : null}
@@ -140,7 +142,7 @@ export default function WeekAdaptationSummary({
       <button
         type="button"
         onClick={onDismiss}
-        className="w-full rounded-md bg-stone-900 py-3 text-sm font-medium text-white hover:bg-stone-700"
+        className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim"
       >
         Got it — back to calendar
       </button>

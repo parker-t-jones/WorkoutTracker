@@ -12,16 +12,16 @@ function Stepper({ label, value, onChange, step = 1, min = 0, suffix = '' }) {
         <button
           type="button"
           onClick={() => onChange(Math.max(min, roundToStep(value - step, step)))}
-          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-stone-200 text-2xl font-medium active:bg-stone-300"
+          className="flex h-14 w-14 shrink-0 items-center justify-center rounded bg-surface-alt text-2xl font-medium text-ink active:bg-orange-dim/40"
           aria-label={`Decrease ${label}`}
         >
           −
         </button>
         <div className="min-w-0 flex-1 text-center">
-          <div className="text-3xl font-semibold tabular-nums">
+          <div className="font-display text-3xl font-semibold tabular-nums">
             {value}
             {suffix ? (
-              <span className="ml-1 text-lg font-normal text-stone-500">
+              <span className="ml-1 text-lg font-normal text-muted">
                 {suffix}
               </span>
             ) : null}
@@ -30,7 +30,7 @@ function Stepper({ label, value, onChange, step = 1, min = 0, suffix = '' }) {
         <button
           type="button"
           onClick={() => onChange(roundToStep(value + step, step))}
-          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-stone-200 text-2xl font-medium active:bg-stone-300"
+          className="flex h-14 w-14 shrink-0 items-center justify-center rounded bg-surface-alt text-2xl font-medium text-ink active:bg-orange-dim/40"
           aria-label={`Increase ${label}`}
         >
           +
@@ -76,12 +76,12 @@ function parseWeight(raw) {
 
 function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
   return (
-    <div className="space-y-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-3">
+    <div className="space-y-3 rounded border border-orange-dim/40 bg-surface-alt px-3 py-3">
       <div>
         <div className="text-sm font-medium">
           {editing ? 'Edit RPE' : 'How hard did that feel?'}
         </div>
-        <p className="mt-0.5 text-xs text-stone-500">
+        <p className="mt-0.5 text-xs text-muted">
           Optional — RPE 1 easy, 10 max effort.
           {editing ? ' Tap a number to update.' : ' Skip anytime.'}
         </p>
@@ -96,10 +96,10 @@ function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
               disabled={saving}
               onClick={() => onSelect(n)}
               className={[
-                'h-11 rounded-md text-sm font-semibold tabular-nums active:scale-[0.98]',
+                'h-11 rounded text-sm font-semibold tabular-nums active:scale-[0.98]',
                 selected
-                  ? 'bg-stone-900 text-white'
-                  : 'bg-white text-stone-800 ring-1 ring-stone-300 hover:bg-stone-100',
+                  ? 'bg-orange text-bg'
+                  : 'bg-surface text-ink ring-1 ring-orange-dim/50 hover:bg-surface-alt',
                 saving ? 'opacity-60' : '',
               ].join(' ')}
               aria-label={`RPE ${n}`}
@@ -116,7 +116,7 @@ function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
             type="button"
             disabled={saving}
             onClick={onClear}
-            className="flex-1 py-2 text-sm text-stone-600 hover:text-stone-900 disabled:opacity-60"
+            className="flex-1 py-2 text-sm text-muted hover:text-ink disabled:opacity-60"
           >
             Clear RPE
           </button>
@@ -125,7 +125,7 @@ function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
           type="button"
           disabled={saving}
           onClick={onSkip}
-          className="flex-1 py-2 text-sm text-stone-600 hover:text-stone-900 disabled:opacity-60"
+          className="flex-1 py-2 text-sm text-muted hover:text-ink disabled:opacity-60"
         >
           {editing ? 'Done' : 'Skip'}
         </button>
@@ -149,7 +149,7 @@ function SetForm({
   return (
     <div className="space-y-6">
       {title ? (
-        <p className="text-sm font-medium text-stone-700">{title}</p>
+        <p className="text-sm font-medium text-ink">{title}</p>
       ) : null}
 
       <Stepper label="Reps" value={reps} onChange={setReps} step={1} min={0} />
@@ -168,17 +168,17 @@ function SetForm({
             value={weightText}
             onChange={(e) => setWeightText(sanitizeWeightInput(e.target.value))}
             onFocus={(e) => e.target.select()}
-            className="h-14 w-full rounded-md border border-stone-300 bg-white px-4 pr-12 text-center text-3xl font-semibold tabular-nums focus:border-stone-500 focus:outline-none focus:ring-1 focus:ring-stone-500"
+            className="h-14 w-full rounded border border-orange-dim/50 bg-surface px-4 pr-12 text-center font-display text-3xl font-semibold tabular-nums text-ink focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
             aria-label="Weight in pounds"
           />
-          <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-lg text-stone-500">
+          <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-lg text-muted">
             lb
           </span>
         </div>
       </div>
 
       {error ? (
-        <p role="alert" className="text-sm text-red-700">
+        <p role="alert" className="text-sm text-red-300">
           {error}
         </p>
       ) : null}
@@ -187,7 +187,7 @@ function SetForm({
         type="button"
         onClick={onPrimary}
         disabled={saving}
-        className="w-full rounded-md bg-stone-900 py-4 text-base font-medium text-white hover:bg-stone-700 disabled:opacity-60"
+        className="w-full rounded bg-orange py-4 text-base font-medium text-bg hover:bg-orange-dim disabled:opacity-60"
       >
         {saving ? 'Saving…' : primaryLabel}
       </button>
@@ -197,7 +197,7 @@ function SetForm({
           type="button"
           onClick={onCancel}
           disabled={saving}
-          className="w-full py-2 text-sm text-stone-600 hover:text-stone-900 disabled:opacity-60"
+          className="w-full py-2 text-sm text-muted hover:text-ink disabled:opacity-60"
         >
           Cancel
         </button>
@@ -361,45 +361,45 @@ export default function LogSet({
       <button
         type="button"
         onClick={onBack}
-        className="mb-4 text-sm text-stone-600 hover:text-stone-900"
+        className="mb-4 text-sm text-muted hover:text-ink"
       >
         ← Workout
       </button>
 
       <header className="mb-6">
-        <p className="text-sm text-stone-500">
+        <p className="text-sm text-muted">
           {editingLog
             ? `Editing set ${editingLog.set_number} of ${workoutExercise.sets}`
             : done
               ? `${workoutExercise.sets} sets logged`
               : `Set ${Math.min(nextSet, workoutExercise.sets)} of ${workoutExercise.sets}`}
         </p>
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
           {workoutExercise.exercise?.name ?? 'Exercise'}
         </h1>
-        <p className="mt-1 text-sm text-stone-600">
+        <p className="mt-1 text-sm text-muted">
           Prescribed: {workoutExercise.sets} × {workoutExercise.reps} ·{' '}
           {workoutExercise.weight_guidance}
         </p>
         {workoutExercise.notes ? (
-          <p className="mt-1 text-sm text-stone-500">{workoutExercise.notes}</p>
+          <p className="mt-1 text-sm text-muted">{workoutExercise.notes}</p>
         ) : null}
       </header>
 
       {sortedLogs.length > 0 && !editingLog && (
-        <ul className="mb-6 space-y-1 rounded-md border border-stone-200 bg-white px-3 py-2 text-sm">
+        <ul className="mb-6 space-y-1 rounded border border-orange-dim/40 bg-surface px-3 py-2 text-sm">
           {sortedLogs.map((l) => (
             <li key={l.id}>
               <button
                 type="button"
                 onClick={() => startEdit(l)}
-                className="flex w-full items-center justify-between py-2 text-left hover:bg-stone-50 active:bg-stone-100"
+                className="flex w-full items-center justify-between py-2 text-left hover:bg-surface-alt active:bg-surface-alt"
               >
-                <span>Set {l.set_number}</span>
-                <span className="tabular-nums text-stone-700">
+                <span className="font-mono">Set {l.set_number}</span>
+                <span className="font-mono tabular-nums text-ink">
                   {l.actual_reps} reps
                   {l.actual_weight != null ? ` @ ${l.actual_weight}` : ''}
-                  <span className="ml-2 text-xs text-stone-400">Edit</span>
+                  <span className="ml-2 font-sans text-xs text-muted">Edit</span>
                 </span>
               </button>
             </li>
@@ -422,7 +422,7 @@ export default function LogSet({
         />
       ) : done ? (
         <div className="space-y-3">
-          <p className="rounded-md bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+          <p className="rounded bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
             All {workoutExercise.sets} sets logged — tap a set above to edit.
           </p>
 
@@ -439,19 +439,19 @@ export default function LogSet({
             <button
               type="button"
               onClick={() => setRpePromptOpen(true)}
-              className="w-full rounded-md border border-stone-200 bg-white px-3 py-3 text-left text-sm hover:bg-stone-50"
+              className="w-full rounded border border-orange-dim/40 bg-surface px-3 py-3 text-left text-sm hover:bg-surface-alt"
             >
-              <span className="font-medium text-stone-800">
+              <span className="font-medium text-ink">
                 {rpe != null ? `RPE ${rpe}` : 'Add RPE'}
               </span>
-              <span className="ml-2 text-stone-400">
+              <span className="ml-2 text-muted">
                 {rpe != null ? '· tap to change' : '· optional'}
               </span>
             </button>
           )}
 
           {error && !editingLog ? (
-            <p role="alert" className="text-sm text-red-700">
+            <p role="alert" className="text-sm text-red-300">
               {error}
             </p>
           ) : null}
@@ -459,7 +459,7 @@ export default function LogSet({
           <button
             type="button"
             onClick={onBack}
-            className="w-full rounded-md bg-stone-900 py-3 text-sm font-medium text-white hover:bg-stone-700"
+            className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim"
           >
             Back to workout
           </button>

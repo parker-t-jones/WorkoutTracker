@@ -396,7 +396,7 @@ export default function App() {
 
   if (bootstrapping && !submitting) {
     return (
-      <div className="mx-auto max-w-lg px-4 py-16 text-center text-stone-500">
+      <div className="mx-auto max-w-lg px-4 py-16 text-center text-muted">
         Loading…
       </div>
     )
@@ -404,7 +404,7 @@ export default function App() {
 
   if (loadError) {
     return (
-      <div className="mx-auto max-w-lg px-4 py-16 text-center text-red-700">
+      <div className="mx-auto max-w-lg px-4 py-16 text-center text-red-300">
         {loadError}
       </div>
     )

@@ -10,7 +10,7 @@ const STATUS_MESSAGES = [
 function Spinner() {
   return (
     <svg
-      className="h-8 w-8 animate-spin text-stone-800"
+      className="h-8 w-8 animate-spin text-orange"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -65,6 +65,7 @@ export default function CalendarView({
   const totalDays = daysInMonth(today)
   const startWeekday = monthStart.getDay()
   const [statusIndex, setStatusIndex] = useState(0)
+  const todayKey = toDateKey(today)
 
   useEffect(() => {
     if (!generatingNextWeek) {
@@ -92,7 +93,7 @@ export default function CalendarView({
       key,
       day,
       dateKey: key,
-      isToday: key === toDateKey(today),
+      isToday: key === todayKey,
       scheduled: byDate[key] ?? null,
     })
   }
@@ -102,12 +103,14 @@ export default function CalendarView({
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <header className="mb-6">
-        <p className="text-sm text-stone-500">This week</p>
-        <h1 className="text-2xl font-semibold tracking-tight">{monthLabel}</h1>
+        <p className="text-sm text-muted">This week</p>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          {monthLabel}
+        </h1>
       </header>
 
       {canGenerateNextWeek || generatingNextWeek ? (
-        <div className="mb-6 rounded-md border border-stone-200 bg-white px-3 py-3">
+        <div className="mb-6 rounded border border-orange-dim/40 bg-surface px-3 py-3">
           {generatingNextWeek ? (
             <div
               role="status"
@@ -115,23 +118,23 @@ export default function CalendarView({
               className="flex flex-col items-center gap-3 py-4 text-center"
             >
               <Spinner />
-              <p className="text-sm font-medium text-stone-800">
+              <p className="text-sm font-medium text-ink">
                 {STATUS_MESSAGES[statusIndex]}
               </p>
-              <p className="text-xs text-stone-500">
+              <p className="text-xs text-muted">
                 This usually takes about a minute.
               </p>
             </div>
           ) : (
             <>
-              <p className="text-sm text-stone-700">
+              <p className="text-sm text-ink">
                 Current week is done. Generate next week from your logs
                 (loads, RPE, and any felt-off flags).
               </p>
               {generateNextWeekError ? (
                 <p
                   role="alert"
-                  className="mt-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800"
+                  className="mt-2 rounded bg-red-950/60 px-3 py-2 text-sm text-red-300"
                 >
                   {generateNextWeekError}
                 </p>
@@ -140,7 +143,7 @@ export default function CalendarView({
                 type="button"
                 onClick={onGenerateNextWeek}
                 disabled={generatingNextWeek}
-                className="mt-3 w-full rounded-md bg-stone-900 py-3 text-sm font-medium text-white hover:bg-stone-700 disabled:pointer-events-none disabled:opacity-60"
+                className="mt-3 w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim disabled:pointer-events-none disabled:opacity-60"
               >
                 Generate next week
               </button>
@@ -149,7 +152,7 @@ export default function CalendarView({
         </div>
       ) : null}
 
-      <div className="mb-2 grid grid-cols-7 gap-1 text-center text-xs font-medium text-stone-500">
+      <div className="mb-2 grid grid-cols-7 gap-1 text-center font-display text-xs font-medium text-muted">
         {WEEKDAYS.map((d) => (
           <div key={d}>{d}</div>
         ))}
@@ -172,18 +175,18 @@ export default function CalendarView({
               disabled={!sw}
               onClick={() => sw && onSelectScheduled(sw.id)}
               className={[
-                'flex aspect-square flex-col items-start rounded-md p-1.5 text-left text-sm transition',
-                cell.isToday ? 'ring-2 ring-stone-800' : '',
+                'flex aspect-square flex-col items-start rounded border-[1.5px] p-1.5 text-left text-sm transition',
+                cell.isToday ? 'ring-2 ring-orange ring-offset-1 ring-offset-bg' : '',
                 sw
                   ? done
-                    ? 'bg-emerald-100 hover:bg-emerald-200'
-                    : 'bg-amber-100 hover:bg-amber-200'
-                  : 'bg-transparent text-stone-400',
+                    ? 'border-orange/20 bg-surface text-ink hover:border-orange/35'
+                    : 'border-orange bg-surface text-ink hover:border-orange-dim'
+                  : 'border-transparent bg-transparent text-muted',
               ].join(' ')}
             >
-              <span className="font-medium">{cell.day}</span>
+              <span className="font-display font-medium">{cell.day}</span>
               {workout && (
-                <span className="mt-auto line-clamp-2 text-[10px] leading-tight text-stone-700">
+                <span className="mt-auto line-clamp-2 font-display text-[10px] leading-tight text-muted">
                   {workout.focus}
                 </span>
               )}
@@ -193,27 +196,34 @@ export default function CalendarView({
       </div>
 
       <ul className="mt-8 space-y-2">
-        <li className="text-sm font-medium text-stone-600">
+        <li className="font-display text-sm font-medium text-muted">
           Upcoming
         </li>
         {scheduledWorkouts.length === 0 ? (
-          <li className="text-sm text-stone-500">No workouts in this window.</li>
+          <li className="text-sm text-muted">No workouts in this window.</li>
         ) : null}
         {scheduledWorkouts
           .slice()
           .sort((a, b) => a.date.localeCompare(b.date))
           .map((sw) => {
             const workout = getWorkout(sw.workout_id)
+            const done = sw.status === 'completed'
+            const isActive = !done && sw.date === todayKey
             return (
               <li key={sw.id}>
                 <button
                   type="button"
                   onClick={() => onSelectScheduled(sw.id)}
-                  className="flex w-full items-center justify-between rounded-md border border-stone-200 bg-white px-3 py-3 text-left hover:border-stone-400"
+                  className={[
+                    'flex w-full items-center gap-3 rounded border border-orange-dim/40 bg-surface px-3 py-3 text-left hover:border-orange',
+                    isActive ? 'hazard-stripe' : '',
+                  ].join(' ')}
                 >
-                  <div>
-                    <div className="font-medium">{workout?.focus ?? 'Workout'}</div>
-                    <div className="text-sm text-stone-500">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-display font-medium">
+                      {workout?.focus ?? 'Workout'}
+                    </div>
+                    <div className="font-mono text-sm text-muted">
                       {sw.date}
                       {workout?.week_number != null
                         ? ` · Week ${workout.week_number}`
@@ -221,14 +231,23 @@ export default function CalendarView({
                     </div>
                   </div>
                   <span
-                    className={[
-                      'rounded px-2 py-0.5 text-xs font-medium',
-                      sw.status === 'completed'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-amber-100 text-amber-800',
-                    ].join(' ')}
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-orange-dim/40 bg-transparent"
+                    aria-label={done ? 'Completed' : 'Pending'}
                   >
-                    {sw.status}
+                    {done ? (
+                      <svg
+                        viewBox="0 0 16 16"
+                        className="h-3 w-3 text-ink/70"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+                      </svg>
+                    ) : null}
                   </span>
                 </button>
               </li>

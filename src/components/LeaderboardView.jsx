@@ -35,8 +35,10 @@ export default function LeaderboardView({ currentUserId }) {
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Leaderboard</h1>
-        <p className="mt-1 text-sm text-stone-500">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          Leaderboard
+        </h1>
+        <p className="mt-1 text-sm text-muted">
           Family completion scores — live from current schedules
         </p>
       </header>
@@ -53,10 +55,10 @@ export default function LeaderboardView({ currentUserId }) {
               type="button"
               onClick={() => setSortBy(opt.id)}
               className={[
-                'flex-1 rounded-md py-2 text-sm font-medium',
+                'flex-1 rounded py-2 text-sm font-medium',
                 selected
-                  ? 'bg-stone-900 text-white'
-                  : 'bg-white text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50',
+                  ? 'bg-orange text-bg'
+                  : 'bg-surface text-muted ring-1 ring-orange-dim/50 hover:bg-surface-alt hover:text-ink',
               ].join(' ')}
             >
               {opt.label}
@@ -66,22 +68,25 @@ export default function LeaderboardView({ currentUserId }) {
       </div>
 
       {loading ? (
-        <p className="py-8 text-center text-sm text-stone-500">Loading…</p>
+        <p className="py-8 text-center text-sm text-muted">Loading…</p>
       ) : error ? (
         <div className="space-y-3">
-          <p role="alert" className="rounded-md bg-red-50 px-3 py-3 text-sm text-red-700">
+          <p
+            role="alert"
+            className="rounded bg-red-950/60 px-3 py-3 text-sm text-red-300"
+          >
             {error}
           </p>
           <button
             type="button"
             onClick={load}
-            className="w-full rounded-md border border-stone-300 bg-white py-2 text-sm font-medium hover:bg-stone-50"
+            className="w-full rounded border border-orange-dim/50 bg-surface py-2 text-sm font-medium text-ink hover:bg-surface-alt"
           >
             Retry
           </button>
         </div>
       ) : ranked.length === 0 ? (
-        <p className="rounded-md border border-dashed border-stone-300 bg-white px-4 py-8 text-center text-sm text-stone-500">
+        <p className="rounded border border-dashed border-orange-dim/50 bg-surface px-4 py-8 text-center text-sm text-muted">
           No family members yet.
         </p>
       ) : (
@@ -94,25 +99,25 @@ export default function LeaderboardView({ currentUserId }) {
               <li
                 key={row.user_id}
                 className={[
-                  'flex items-center gap-3 rounded-md border px-3 py-3',
+                  'flex items-center gap-3 rounded border px-3 py-3',
                   isYou
-                    ? 'border-stone-900 bg-stone-50'
-                    : 'border-stone-200 bg-white',
+                    ? 'border-orange bg-surface-alt'
+                    : 'border-orange-dim/40 bg-surface',
                 ].join(' ')}
               >
-                <span className="w-6 shrink-0 text-center text-sm font-semibold tabular-nums text-stone-500">
+                <span className="w-6 shrink-0 text-center font-display text-sm font-semibold tabular-nums text-muted">
                   {index + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium">
+                  <div className="truncate font-display font-medium">
                     {row.name}
                     {isYou ? (
-                      <span className="ml-1 text-xs font-normal text-stone-500">
+                      <span className="ml-1 font-sans text-xs font-normal text-muted">
                         (you)
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-0.5 text-xs text-stone-500">
+                  <div className="mt-0.5 font-mono text-xs text-muted">
                     Week {formatScorePercent(row.weekly_score)} · Month{' '}
                     {formatScorePercent(row.monthly_score)} · Streak{' '}
                     {row.streak ?? 0}
@@ -120,7 +125,7 @@ export default function LeaderboardView({ currentUserId }) {
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
-                  <div className="text-xl font-semibold tabular-nums">
+                  <div className="font-display text-xl font-semibold tabular-nums">
                     {formatScorePercent(primary)}
                   </div>
                 </div>
@@ -130,7 +135,7 @@ export default function LeaderboardView({ currentUserId }) {
         </ol>
       )}
 
-      <p className="mt-6 text-xs text-stone-400">
+      <p className="mt-6 text-xs text-muted">
         Score = workout completion × 60% + exercise completion × 40%. Ties break
         on streak (consecutive weeks above 0%).
       </p>

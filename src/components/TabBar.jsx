@@ -16,10 +16,10 @@ export default function TabBar({ active, onChange }) {
             type="button"
             onClick={() => onChange(tab.id)}
             className={[
-              'flex-1 rounded-md px-1 py-2 text-xs font-medium sm:text-sm',
+              'flex-1 rounded px-1 py-2 text-xs font-medium sm:text-sm',
               selected
-                ? 'bg-stone-900 text-white'
-                : 'bg-white text-stone-600 ring-1 ring-stone-200 hover:bg-stone-50',
+                ? 'bg-orange text-bg'
+                : 'bg-surface text-muted ring-1 ring-orange-dim/50 hover:bg-surface-alt hover:text-ink',
             ].join(' ')}
           >
             {tab.label}

@@ -20,7 +20,7 @@ const STATUS_MESSAGES = [
 function Spinner() {
   return (
     <svg
-      className="h-8 w-8 animate-spin text-stone-800"
+      className="h-8 w-8 animate-spin text-orange"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -66,15 +66,15 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
           <button
             type="button"
             onClick={onSignOut}
-            className="text-sm text-stone-500 underline hover:text-stone-800"
+            className="text-sm text-muted underline hover:text-ink"
           >
             Sign out
           </button>
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
           Set up your program
         </h1>
-        <p className="mt-2 text-sm text-stone-600">
+        <p className="mt-2 text-sm text-muted">
           Answer five questions and we&apos;ll generate your first week.
           Later weeks adapt from how you train.
         </p>
@@ -115,7 +115,7 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
             required
             defaultValue="4"
             disabled={submitting}
-            className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 disabled:opacity-60"
+            className="w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-ink disabled:opacity-60"
           >
             {DAYS.map((n) => (
               <option key={n} value={n}>
@@ -138,21 +138,21 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
         <label className="block space-y-2">
           <span className="text-sm font-medium">
             Injuries or limitations{' '}
-            <span className="font-normal text-stone-400">(optional)</span>
+            <span className="font-normal text-muted">(optional)</span>
           </span>
           <textarea
             name="limitations"
             rows={3}
             placeholder='e.g. "bad left knee"'
             disabled={submitting}
-            className="w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm disabled:opacity-60"
+            className="w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted disabled:opacity-60"
           />
         </label>
 
         {error && !submitting ? (
           <p
             role="alert"
-            className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800"
+            className="rounded bg-red-950/60 px-3 py-2 text-sm text-red-300"
           >
             {error}
           </p>
@@ -162,13 +162,13 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
           <div
             role="status"
             aria-live="polite"
-            className="flex flex-col items-center gap-3 rounded-md border border-stone-200 bg-white px-4 py-6 text-center"
+            className="flex flex-col items-center gap-3 rounded border border-orange-dim/40 bg-surface px-4 py-6 text-center"
           >
             <Spinner />
-            <p className="text-sm font-medium text-stone-800">
+            <p className="text-sm font-medium text-ink">
               {STATUS_MESSAGES[statusIndex]}
             </p>
-            <p className="text-xs text-stone-500">
+            <p className="text-xs text-muted">
               This usually takes about a minute.
             </p>
           </div>
@@ -178,7 +178,7 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
           type="submit"
           disabled={submitting}
           aria-disabled={submitting}
-          className="w-full rounded-md bg-stone-900 py-3 text-sm font-medium text-white hover:bg-stone-700 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="w-full rounded bg-orange py-3 text-sm font-medium text-bg hover:bg-orange-dim disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60"
         >
           {submitting ? 'Generating…' : 'Generate my program'}
         </button>

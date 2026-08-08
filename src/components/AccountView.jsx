@@ -25,11 +25,13 @@ export default function AccountView({
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          Account
+        </h1>
       </header>
 
-      <div className="rounded-md border border-stone-200 bg-white px-4 py-4">
-        <div className="text-xs uppercase tracking-wide text-stone-500">
+      <div className="rounded border border-orange-dim/40 bg-surface px-4 py-4">
+        <div className="text-xs uppercase tracking-wide text-muted">
           Signed in as
         </div>
         <div className="mt-1 text-sm font-medium">{email || '—'}</div>
@@ -38,29 +40,29 @@ export default function AccountView({
       <button
         type="button"
         onClick={onOpenProposals}
-        className="mt-4 flex w-full items-center justify-between rounded-md border border-stone-200 bg-white px-4 py-3 text-left hover:border-stone-400"
+        className="mt-4 flex w-full items-center justify-between rounded border border-orange-dim/40 bg-surface px-4 py-3 text-left hover:border-orange"
       >
         <div>
-          <div className="text-sm font-medium text-stone-900">
+          <div className="text-sm font-medium text-ink">
             Substitution proposals
           </div>
-          <div className="mt-0.5 text-xs text-stone-500">
+          <div className="mt-0.5 text-xs text-muted">
             Review AI suggestions before they enter the live library
           </div>
         </div>
         {pendingCount != null && pendingCount > 0 ? (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
+          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
             {pendingCount}
           </span>
         ) : (
-          <span className="text-sm text-stone-400">→</span>
+          <span className="text-sm text-muted">→</span>
         )}
       </button>
 
       <button
         type="button"
         onClick={onSignOut}
-        className="mt-6 w-full rounded-md border border-stone-300 bg-white py-3 text-sm font-medium text-stone-800 hover:bg-stone-50"
+        className="mt-6 w-full rounded border border-orange-dim/50 bg-surface py-3 text-sm font-medium text-ink hover:bg-surface-alt"
       >
         Sign out
       </button>

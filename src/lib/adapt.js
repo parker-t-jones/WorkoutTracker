@@ -11,6 +11,9 @@ export function decideExerciseAdaptation({
   completionRate,
   avgRpe,
   painFlagged,
+  modality = 'strength',
+  intervalHitRate = null,
+  lateSplitFade = false,
 }) {
   if (painFlagged) {
     return {
@@ -21,12 +24,39 @@ export function decideExerciseAdaptation({
 
   const rate = Number(completionRate) || 0
   const rpe = avgRpe == null ? null : Number(avgRpe)
+  const isCardio = modality === 'cardio'
+
+  // Interval cardio: use split pace adherence when available.
+  if (isCardio && intervalHitRate != null) {
+    const hit = Number(intervalHitRate) || 0
+    if (rate >= 0.9 && hit >= 0.75 && !lateSplitFade && (rpe == null || rpe <= 7.5)) {
+      return {
+        decision: 'progress',
+        reason: `Hit ${Math.round(hit * 100)}% of target split paces — progress pace or add a rep.`,
+      }
+    }
+    if (hit < 0.5 || lateSplitFade || (rate < 0.85 && rpe != null && rpe >= 8)) {
+      return {
+        decision: 'reduce_volume',
+        reason: lateSplitFade
+          ? 'Pace fell off in later splits — back off volume or ease target pace.'
+          : `Split targets mostly missed (${Math.round(hit * 100)}% hit) — reduce interval demand.`,
+      }
+    }
+    return {
+      decision: 'hold',
+      reason: `Hold interval structure (split hit ${Math.round(hit * 100)}%).`,
+    }
+  }
 
   if (rate >= 0.9 && (rpe == null || rpe <= 7.5)) {
     return {
       decision: 'progress',
-      reason:
-        rpe == null
+      reason: isCardio
+        ? rpe == null
+          ? `High completion (${Math.round(rate * 100)}%) — bump duration/distance slightly.`
+          : `High completion (${Math.round(rate * 100)}%) with moderate RPE ${formatRpe(rpe)} — bump duration/distance slightly.`
+        : rpe == null
           ? `High completion (${Math.round(rate * 100)}%) — bump load slightly.`
           : `High completion (${Math.round(rate * 100)}%) with moderate RPE ${formatRpe(rpe)} — bump load slightly.`,
     }
@@ -35,7 +65,9 @@ export function decideExerciseAdaptation({
   if (rate < 0.85 && rpe != null && rpe >= 8) {
     return {
       decision: 'reduce_volume',
-      reason: `Missed volume (${Math.round(rate * 100)}% sets) and high RPE ${formatRpe(rpe)} — fewer sets before cutting weight.`,
+      reason: isCardio
+        ? `Missed volume (${Math.round(rate * 100)}%) and high RPE ${formatRpe(rpe)} — shorten session before cutting intensity.`
+        : `Missed volume (${Math.round(rate * 100)}% sets) and high RPE ${formatRpe(rpe)} — fewer sets before cutting weight.`,
     }
   }
 
@@ -51,7 +83,9 @@ export function decideExerciseAdaptation({
 
   return {
     decision: 'hold',
-    reason: 'Hold steady — no strong signal to change load.',
+    reason: isCardio
+      ? 'Hold steady — no strong signal to change duration/distance.'
+      : 'Hold steady — no strong signal to change load.',
   }
 }
 
@@ -73,8 +107,19 @@ export function equipmentAllowedForAccess(equipmentAccess) {
       'cable',
       'kettlebell',
       'bands',
+      'bike',
+      'pool',
+      'rower',
     ],
-    'home gym': ['barbell', 'dumbbell', 'bodyweight', 'kettlebell', 'bands'],
+    'home gym': [
+      'barbell',
+      'dumbbell',
+      'bodyweight',
+      'kettlebell',
+      'bands',
+      'bike',
+      'rower',
+    ],
     'dumbbells only': ['dumbbell', 'bodyweight', 'bands', 'kettlebell'],
     'bodyweight only': ['bodyweight'],
   }
@@ -128,6 +173,7 @@ export function reasonTagDisplay(reasonTag, primaryTags = []) {
  */
 export function pickVettedSubstitute(primary, candidates, equipmentAccess) {
   const primaryTags = primary?.contraindication_tags ?? []
+  const primaryModality = primary?.modality === 'cardio' ? 'cardio' : 'strength'
   const allowed = equipmentAllowedForAccess(equipmentAccess)
 
   const ranked = [...(candidates ?? [])].sort(
@@ -140,6 +186,10 @@ export function pickVettedSubstitute(primary, candidates, equipmentAccess) {
     // Drop candidates that still carry every primary risk tag (no relief).
     if (substituteRetainsAllPrimaryTags(primaryTags, subTags)) continue
 
+    const subModality = sub.modality === 'cardio' ? 'cardio' : 'strength'
+    // Keep cardio↔cardio and strength↔strength when modality is known.
+    if (sub.modality != null && subModality !== primaryModality) continue
+
     const required = sub.equipment_required
     if (required && !allowed.has(required)) continue
 
@@ -148,6 +198,7 @@ export function pickVettedSubstitute(primary, candidates, equipmentAccess) {
       name: sub.name,
       equipment_required: sub.equipment_required,
       contraindication_tags: subTags,
+      modality: subModality,
       reason_tag: row.reason_tag,
       priority_rank: row.priority_rank,
     }
@@ -181,6 +232,7 @@ export function resolvePainSubstitutions(
         name: row.name,
         contraindication_tags: primaryTags,
         movement_pattern: row.movement_pattern,
+        modality: row.modality,
       },
       candidates,
       equipmentAccess,
@@ -332,6 +384,72 @@ export function canGenerateNextWeek(
   }
 }
 
+/** Compare logged pace "m:ss" against target pace string; true if within ~5%. */
+function paceWithinTarget(actualPace, targetPace) {
+  if (!actualPace || !targetPace) return null
+  const parse = (p) => {
+    const m = String(p).match(/(\d+)\s*:\s*(\d+)/)
+    if (!m) return null
+    return Number(m[1]) * 60 + Number(m[2])
+  }
+  const a = parse(actualPace)
+  const t = parse(targetPace)
+  if (a == null || t == null || t <= 0) return null
+  return a <= t * 1.05
+}
+
+function analyzeIntervalSplits(we, weLogs, logSplits) {
+  const targets = Array.isArray(we.target_splits) ? we.target_splits : []
+  if (!we.is_interval || targets.length === 0) {
+    return { intervalHitRate: null, lateSplitFade: false, splitsLogged: 0 }
+  }
+  const parentIds = new Set(weLogs.map((l) => l.id))
+  const splits = (logSplits ?? [])
+    .filter((s) => parentIds.has(s.log_id))
+    .sort((a, b) => a.split_number - b.split_number)
+
+  let hits = 0
+  let compared = 0
+  const half = Math.ceil(targets.length / 2)
+  let earlyHits = 0
+  let earlyN = 0
+  let lateHits = 0
+  let lateN = 0
+
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i]
+    const logged = splits.find((s) => s.split_number === i + 1)
+    if (!logged) continue
+    const ok = paceWithinTarget(logged.pace, target.target_pace)
+    if (ok == null) continue
+    compared += 1
+    if (ok) hits += 1
+    if (i < half) {
+      earlyN += 1
+      if (ok) earlyHits += 1
+    } else {
+      lateN += 1
+      if (ok) lateHits += 1
+    }
+  }
+
+  const intervalHitRate = compared > 0 ? hits / compared : null
+  const earlyRate = earlyN > 0 ? earlyHits / earlyN : null
+  const lateRate = lateN > 0 ? lateHits / lateN : null
+  const lateSplitFade =
+    earlyRate != null &&
+    lateRate != null &&
+    earlyRate >= 0.7 &&
+    lateRate <= earlyRate - 0.35
+
+  return {
+    intervalHitRate,
+    lateSplitFade,
+    splitsLogged: splits.length,
+    splitsPrescribed: targets.length,
+  }
+}
+
 /**
  * Aggregate prior-week logs into per-exercise performance + decisions.
  */
@@ -339,6 +457,7 @@ export function buildPriorWeekAdaptation({
   weekNumber,
   weekWorkouts,
   logs,
+  logSplits = [],
 }) {
   /** @type {Map<string, object>} */
   const byExercise = new Map()
@@ -353,15 +472,47 @@ export function buildPriorWeekAdaptation({
       const name = we.exercise?.name ?? 'Exercise'
       const exerciseId = we.exercise_id
       const key = exerciseId || name
+      const modality =
+        we.exercise?.modality === 'cardio' ? 'cardio' : 'strength'
       const prescribedSets = Number(we.sets) || 0
       const weLogs = (logs ?? []).filter((l) => l.workout_exercise_id === we.id)
-      const loggedSets = weLogs.length
+      const intervalMeta = analyzeIntervalSplits(we, weLogs, logSplits)
+
+      let unitsPrescribed = prescribedSets
+      let unitsLogged = weLogs.length
+      if (modality === 'cardio') {
+        if (we.is_interval) {
+          unitsPrescribed = intervalMeta.splitsPrescribed || prescribedSets || 1
+          unitsLogged = intervalMeta.splitsLogged
+        } else {
+          unitsPrescribed = 1
+          unitsLogged = weLogs.some(
+            (l) =>
+              l.actual_duration_seconds != null || l.actual_distance != null,
+          )
+            ? 1
+            : 0
+        }
+      }
+
       const rpes = weLogs.map((l) => l.rpe).filter((r) => r != null)
       const weights = weLogs
         .slice()
         .sort((a, b) => a.set_number - b.set_number)
         .map((l) => (l.actual_weight != null ? Number(l.actual_weight) : null))
         .filter((w) => w != null)
+      const distances = weLogs
+        .map((l) =>
+          l.actual_distance != null ? Number(l.actual_distance) : null,
+        )
+        .filter((d) => d != null)
+      const durations = weLogs
+        .map((l) =>
+          l.actual_duration_seconds != null
+            ? Number(l.actual_duration_seconds)
+            : null,
+        )
+        .filter((d) => d != null)
       const painLogs = weLogs.filter((l) => l.pain_flag)
       const painNote =
         painLogs.find((l) => l.pain_note)?.pain_note ?? null
@@ -370,6 +521,8 @@ export function buildPriorWeekAdaptation({
         byExercise.set(key, {
           exercise_id: exerciseId,
           name,
+          modality,
+          is_interval: Boolean(we.is_interval),
           movement_pattern: we.exercise?.movement_pattern ?? null,
           contraindication_tags: we.exercise?.contraindication_tags ?? [],
           equipment_required: we.exercise?.equipment_required ?? null,
@@ -378,22 +531,38 @@ export function buildPriorWeekAdaptation({
           rpeSum: 0,
           rpeCount: 0,
           weights: [],
+          distances: [],
+          durations: [],
+          intervalHitSum: 0,
+          intervalHitCount: 0,
+          lateSplitFade: false,
           pain_flagged: false,
           pain_note: null,
           sample_reps: we.reps,
           sample_weight_guidance: we.weight_guidance,
           sample_sets: prescribedSets,
+          sample_duration: we.target_duration_seconds ?? null,
+          sample_distance: we.target_distance ?? null,
+          sample_distance_unit: we.distance_unit ?? null,
+          sample_splits: we.target_splits ?? null,
         })
       }
 
       const agg = byExercise.get(key)
-      agg.sets_prescribed += prescribedSets
-      agg.sets_logged += loggedSets
+      agg.sets_prescribed += unitsPrescribed
+      agg.sets_logged += unitsLogged
       for (const r of rpes) {
         agg.rpeSum += Number(r)
         agg.rpeCount += 1
       }
       agg.weights.push(...weights)
+      agg.distances.push(...distances)
+      agg.durations.push(...durations)
+      if (intervalMeta.intervalHitRate != null) {
+        agg.intervalHitSum += intervalMeta.intervalHitRate
+        agg.intervalHitCount += 1
+      }
+      if (intervalMeta.lateSplitFade) agg.lateSplitFade = true
       if (painLogs.length) {
         agg.pain_flagged = true
         if (painNote) agg.pain_note = painNote
@@ -402,9 +571,15 @@ export function buildPriorWeekAdaptation({
       dayExercises.push({
         name,
         sets: prescribedSets,
-        reps: String(we.reps),
-        weight_guidance: we.weight_guidance,
+        reps: String(we.reps ?? ''),
+        weight_guidance: we.weight_guidance ?? '',
         notes: we.notes ?? '',
+        modality,
+        is_interval: Boolean(we.is_interval),
+        target_duration_seconds: we.target_duration_seconds ?? null,
+        target_distance: we.target_distance ?? null,
+        distance_unit: we.distance_unit ?? null,
+        target_splits: we.target_splits ?? null,
       })
     }
 
@@ -429,16 +604,25 @@ export function buildPriorWeekAdaptation({
       : null
     const load_trend =
       firstLoad != null && lastLoad != null ? lastLoad - firstLoad : null
+    const interval_hit_rate =
+      agg.intervalHitCount > 0
+        ? agg.intervalHitSum / agg.intervalHitCount
+        : null
 
     const { decision, reason } = decideExerciseAdaptation({
       completionRate: completion_rate,
       avgRpe: avg_rpe,
       painFlagged: agg.pain_flagged,
+      modality: agg.modality,
+      intervalHitRate: agg.is_interval ? interval_hit_rate : null,
+      lateSplitFade: agg.lateSplitFade,
     })
 
     const row = {
       exercise_id: agg.exercise_id,
       name: agg.name,
+      modality: agg.modality,
+      is_interval: agg.is_interval,
       movement_pattern: agg.movement_pattern,
       contraindication_tags: agg.contraindication_tags ?? [],
       equipment_required: agg.equipment_required,
@@ -447,6 +631,19 @@ export function buildPriorWeekAdaptation({
       completion_rate: Math.round(completion_rate * 1000) / 1000,
       avg_rpe: avg_rpe != null ? Math.round(avg_rpe * 10) / 10 : null,
       load_trend,
+      interval_hit_rate:
+        interval_hit_rate != null
+          ? Math.round(interval_hit_rate * 1000) / 1000
+          : null,
+      late_split_fade: agg.lateSplitFade,
+      distance_trend:
+        agg.distances.length >= 2
+          ? agg.distances[agg.distances.length - 1] - agg.distances[0]
+          : null,
+      duration_trend:
+        agg.durations.length >= 2
+          ? agg.durations[agg.durations.length - 1] - agg.durations[0]
+          : null,
       pain_flagged: agg.pain_flagged,
       pain_note: agg.pain_note,
       decision,
@@ -454,6 +651,10 @@ export function buildPriorWeekAdaptation({
       prior_sets: agg.sample_sets,
       prior_reps: agg.sample_reps,
       prior_weight_guidance: agg.sample_weight_guidance,
+      prior_duration_seconds: agg.sample_duration,
+      prior_distance: agg.sample_distance,
+      prior_distance_unit: agg.sample_distance_unit,
+      prior_splits: agg.sample_splits,
     }
 
     decisions.push(row)

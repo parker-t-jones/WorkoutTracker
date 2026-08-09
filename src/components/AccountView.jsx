@@ -5,6 +5,7 @@ import {
   resolveTheme,
   setThemePreference,
 } from '../lib/theme'
+import { getDistanceUnit, setDistanceUnit } from '../lib/units'
 
 export default function AccountView({
   email,
@@ -13,6 +14,7 @@ export default function AccountView({
 }) {
   const [pendingCount, setPendingCount] = useState(null)
   const [theme, setTheme] = useState(() => resolveTheme())
+  const [distanceUnit, setDistanceUnitState] = useState(() => getDistanceUnit())
 
   useEffect(() => {
     let cancelled = false
@@ -39,6 +41,10 @@ export default function AccountView({
   function chooseTheme(next) {
     setThemePreference(next)
     setTheme(next)
+  }
+
+  function chooseDistanceUnit(next) {
+    setDistanceUnitState(setDistanceUnit(next))
   }
 
   return (
@@ -76,6 +82,37 @@ export default function AccountView({
                 key={opt.id}
                 type="button"
                 onClick={() => chooseTheme(opt.id)}
+                className={[
+                  'flex-1 rounded py-2 text-sm font-medium',
+                  selected
+                    ? 'bg-orange text-on-orange'
+                    : 'bg-surface-alt text-muted ring-1 ring-orange-dim/40 hover:text-ink',
+                ].join(' ')}
+                aria-pressed={selected}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="mt-5 text-xs uppercase tracking-wide text-muted">
+          Distance
+        </div>
+        <p className="mt-1 text-sm text-muted">
+          Used for cardio targets and logging. Saved on this device.
+        </p>
+        <div className="mt-3 flex gap-1">
+          {[
+            { id: 'mi', label: 'Miles' },
+            { id: 'km', label: 'Kilometers' },
+          ].map((opt) => {
+            const selected = distanceUnit === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => chooseDistanceUnit(opt.id)}
                 className={[
                   'flex-1 rounded py-2 text-sm font-medium',
                   selected

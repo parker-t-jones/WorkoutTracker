@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { computePace } from './units'
 
 function assertSupabase() {
   if (!supabase) {
@@ -37,12 +38,46 @@ export function isBodyweightGuidance(guidance) {
   return /bodyweight|bw\b|unweighted/i.test(String(guidance))
 }
 
+export function exerciseModality(we) {
+  return we?.exercise?.modality === 'cardio' ? 'cardio' : 'strength'
+}
+
+export function isCardioExercise(we) {
+  return exerciseModality(we) === 'cardio'
+}
+
+export function prescribedSplitCount(we) {
+  if (Array.isArray(we?.target_splits) && we.target_splits.length > 0) {
+    return we.target_splits.length
+  }
+  return Number(we?.sets) || 0
+}
+
+/** True when this workout_exercise has enough logged work to count as done. */
+export function isExerciseFullyLogged(we, logs, logSplits = []) {
+  const weLogs = (logs ?? []).filter((l) => l.workout_exercise_id === we.id)
+  if (isCardioExercise(we)) {
+    if (we.is_interval) {
+      const needed = prescribedSplitCount(we)
+      if (needed <= 0) return weLogs.length >= 1
+      const parentIds = new Set(weLogs.map((l) => l.id))
+      const splitCount = (logSplits ?? []).filter((s) =>
+        parentIds.has(s.log_id),
+      ).length
+      return splitCount >= needed
+    }
+    return weLogs.some(
+      (l) =>
+        l.actual_duration_seconds != null || l.actual_distance != null,
+    )
+  }
+  return weLogs.length >= (Number(we.sets) || 0)
+}
+
 /**
  * Insert one set into logs. If every prescribed set for the scheduled
  * workout is now logged, mark scheduled_workouts.status = completed.
  * Returns { log, completed }.
- *
- * user_id always comes from the live session (auth.getUser()), not callers.
  */
 export async function saveSetLog({
   scheduledWorkoutId,
@@ -52,6 +87,7 @@ export async function saveSetLog({
   actualWeight,
   exercises,
   existingLogs,
+  logSplits = [],
 }) {
   const client = assertSupabase()
   const userId = await requireAuthUserId()
@@ -74,25 +110,15 @@ export async function saveSetLog({
   if (error) throw error
 
   const allLogs = [...existingLogs, log]
-  const completed = isWorkoutFullyLogged(exercises, allLogs)
+  const completed = isWorkoutFullyLogged(exercises, allLogs, logSplits)
 
   if (completed) {
-    const { error: statusErr } = await client
-      .from('scheduled_workouts')
-      .update({ status: 'completed' })
-      .eq('id', scheduledWorkoutId)
-      .eq('user_id', userId)
-
-    if (statusErr) throw statusErr
+    await markScheduledCompleted(scheduledWorkoutId, userId)
   }
 
   return { log, completed }
 }
 
-/**
- * Update reps/weight on an existing log row. Leaves completed_at unchanged
- * so it still reflects when the set was first logged.
- */
 export async function updateSetLog({ logId, actualReps, actualWeight }) {
   const client = assertSupabase()
   const userId = await requireAuthUserId()
@@ -112,10 +138,172 @@ export async function updateSetLog({ logId, actualReps, actualWeight }) {
   return log
 }
 
+/** Save or update a steady-state cardio log (one row per exercise). */
+export async function saveCardioLog({
+  scheduledWorkoutId,
+  workoutExerciseId,
+  actualDurationSeconds,
+  actualDistance,
+  distanceUnit,
+  exercises,
+  existingLogs,
+  logSplits = [],
+  existingLogId = null,
+}) {
+  const client = assertSupabase()
+  const userId = await requireAuthUserId()
+
+  const fields = {
+    actual_duration_seconds: actualDurationSeconds,
+    actual_distance: actualDistance,
+    distance_unit: distanceUnit,
+    actual_reps: 0,
+    actual_weight: null,
+  }
+
+  let log
+  if (existingLogId) {
+    const { data, error } = await client
+      .from('logs')
+      .update(fields)
+      .eq('id', existingLogId)
+      .eq('user_id', userId)
+      .select()
+      .single()
+    if (error) throw error
+    log = data
+  } else {
+    const { data, error } = await client
+      .from('logs')
+      .insert({
+        workout_exercise_id: workoutExerciseId,
+        user_id: userId,
+        set_number: 1,
+        completed_at: new Date().toISOString(),
+        ...fields,
+      })
+      .select()
+      .single()
+    if (error) throw error
+    log = data
+  }
+
+  const allLogs = existingLogId
+    ? existingLogs.map((l) => (l.id === log.id ? log : l))
+    : [...existingLogs, log]
+  const completed = isWorkoutFullyLogged(exercises, allLogs, logSplits)
+  if (completed) {
+    await markScheduledCompleted(scheduledWorkoutId, userId)
+  }
+  return { log, completed }
+}
+
 /**
- * Apply an optional exercise-level RPE to every logged set for that
- * workout_exercise. Pass null to clear.
+ * Ensure a parent log exists for an interval session, then upsert one split.
+ * Returns { log, split, completed, logSplits }.
  */
+export async function saveIntervalSplit({
+  scheduledWorkoutId,
+  workoutExerciseId,
+  splitNumber,
+  distance,
+  distanceUnit,
+  durationSeconds,
+  exercises,
+  existingLogs,
+  logSplits = [],
+  parentLogId = null,
+}) {
+  const client = assertSupabase()
+  const userId = await requireAuthUserId()
+
+  let parentLog =
+    parentLogId != null
+      ? existingLogs.find((l) => l.id === parentLogId) ?? null
+      : existingLogs.find((l) => l.workout_exercise_id === workoutExerciseId) ??
+        null
+
+  if (!parentLog) {
+    const { data, error } = await client
+      .from('logs')
+      .insert({
+        workout_exercise_id: workoutExerciseId,
+        user_id: userId,
+        set_number: 1,
+        actual_reps: 0,
+        actual_weight: null,
+        completed_at: new Date().toISOString(),
+      })
+      .select()
+      .single()
+    if (error) throw error
+    parentLog = data
+  }
+
+  const pace = computePace(durationSeconds, distance)
+  const splitPayload = {
+    log_id: parentLog.id,
+    split_number: splitNumber,
+    distance,
+    distance_unit: distanceUnit,
+    duration_seconds: durationSeconds,
+    pace,
+  }
+
+  const existingSplit = (logSplits ?? []).find(
+    (s) => s.log_id === parentLog.id && s.split_number === splitNumber,
+  )
+
+  let split
+  if (existingSplit) {
+    const { data, error } = await client
+      .from('log_splits')
+      .update({
+        distance,
+        distance_unit: distanceUnit,
+        duration_seconds: durationSeconds,
+        pace,
+      })
+      .eq('id', existingSplit.id)
+      .select()
+      .single()
+    if (error) throw error
+    split = data
+  } else {
+    const { data, error } = await client
+      .from('log_splits')
+      .insert(splitPayload)
+      .select()
+      .single()
+    if (error) throw error
+    split = data
+  }
+
+  const allLogs = existingLogs.some((l) => l.id === parentLog.id)
+    ? existingLogs
+    : [...existingLogs, parentLog]
+  const nextSplits = existingSplit
+    ? logSplits.map((s) => (s.id === split.id ? split : s))
+    : [...(logSplits ?? []), split]
+
+  const completed = isWorkoutFullyLogged(exercises, allLogs, nextSplits)
+  if (completed) {
+    await markScheduledCompleted(scheduledWorkoutId, userId)
+  }
+
+  return { log: parentLog, split, completed, logSplits: nextSplits }
+}
+
+async function markScheduledCompleted(scheduledWorkoutId, userId) {
+  const client = assertSupabase()
+  const { error } = await client
+    .from('scheduled_workouts')
+    .update({ status: 'completed' })
+    .eq('id', scheduledWorkoutId)
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
 export async function updateExerciseRpe({ workoutExerciseId, rpe }) {
   const client = assertSupabase()
   const userId = await requireAuthUserId()
@@ -140,10 +328,6 @@ export async function updateExerciseRpe({ workoutExerciseId, rpe }) {
   return data ?? []
 }
 
-/**
- * Flag (or clear) pain on every logged set for a workout_exercise.
- * pain_note is optional free text when flagged.
- */
 export async function updateExercisePain({
   workoutExerciseId,
   painFlag,
@@ -169,20 +353,35 @@ export async function updateExercisePain({
   return data ?? []
 }
 
-/** True when each workout_exercise has at least `sets` log rows. */
-export function isWorkoutFullyLogged(exercises, logs) {
+/** True when each workout_exercise has enough logged work. */
+export function isWorkoutFullyLogged(exercises, logs, logSplits = []) {
   if (!exercises?.length) return false
-  return exercises.every((we) => {
-    const count = logs.filter((l) => l.workout_exercise_id === we.id).length
-    return count >= we.sets
-  })
+  return exercises.every((we) => isExerciseFullyLogged(we, logs, logSplits))
 }
 
 export function loggedCountFor(logs, workoutExerciseId) {
   return logs.filter((l) => l.workout_exercise_id === workoutExerciseId).length
 }
 
-/** Shared RPE across an exercise's logs, if any set has one. */
+/** Progress numerator/denominator for UI (sets or splits). */
+export function exerciseProgress(we, logs, logSplits = []) {
+  if (isCardioExercise(we)) {
+    if (we.is_interval) {
+      const total = prescribedSplitCount(we) || 1
+      const weLogs = logs.filter((l) => l.workout_exercise_id === we.id)
+      const parentIds = new Set(weLogs.map((l) => l.id))
+      const done = (logSplits ?? []).filter((s) => parentIds.has(s.log_id))
+        .length
+      return { done, total }
+    }
+    const done = isExerciseFullyLogged(we, logs, logSplits) ? 1 : 0
+    return { done, total: 1 }
+  }
+  const total = Number(we.sets) || 0
+  const done = Math.min(loggedCountFor(logs, we.id), total)
+  return { done, total }
+}
+
 export function exerciseRpe(logs, workoutExerciseId) {
   const row = logs.find(
     (l) => l.workout_exercise_id === workoutExerciseId && l.rpe != null,

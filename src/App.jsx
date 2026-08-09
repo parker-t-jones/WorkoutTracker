@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import CalendarView from './components/CalendarView'
 import WorkoutDetail from './components/WorkoutDetail'
 import LogSet from './components/LogSet'
+import LogCardio from './components/LogCardio'
 import OnboardingForm from './components/OnboardingForm'
 import ProgressView from './components/ProgressView'
 import LeaderboardView from './components/LeaderboardView'
@@ -22,8 +23,11 @@ import {
 import {
   saveSetLog,
   updateSetLog,
+  saveCardioLog,
+  saveIntervalSplit,
   updateExerciseRpe,
   updateExercisePain,
+  isCardioExercise,
 } from './lib/logging'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
 
@@ -47,6 +51,7 @@ export default function App() {
   const [workoutDetails, setWorkoutDetails] = useState({})
   const [userId, setUserId] = useState(null)
   const [logs, setLogs] = useState([])
+  const [logSplits, setLogSplits] = useState([])
 
   const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | workout | log | week-summary | proposals
   const [scheduledId, setScheduledId] = useState(null)
@@ -67,6 +72,7 @@ export default function App() {
     )
     setWorkoutDetails(data.workoutDetails)
     setLogs(data.logs ?? [])
+    setLogSplits(data.logSplits ?? [])
     setNeedsOnboarding(data.scheduledWorkouts.length === 0)
   }, [])
 
@@ -143,6 +149,7 @@ export default function App() {
         setWorkoutsById({})
         setWorkoutDetails({})
         setLogs([])
+        setLogSplits([])
         setNeedsOnboarding(false)
         setView('calendar')
         setAuthScreenMode('login')
@@ -154,8 +161,7 @@ export default function App() {
     return unsubscribe
   }, [])
 
-  async function handleOnboardingSubmit(e) {
-    e.preventDefault()
+  async function handleOnboardingSubmit(answers) {
     if (submittingRef.current) return
     const user = session?.user
     if (!user?.id) return
@@ -163,15 +169,6 @@ export default function App() {
     submittingRef.current = true
     setSubmitting(true)
     setOnboardingError(null)
-
-    const form = new FormData(e.currentTarget)
-    const answers = {
-      goal: form.get('goal'),
-      experience_level: form.get('experience_level'),
-      days_per_week: Number(form.get('days_per_week')),
-      equipment: form.get('equipment'),
-      limitations: String(form.get('limitations') || '').trim(),
-    }
 
     try {
       await generateAndSaveProgram(answers, user.id)
@@ -302,6 +299,7 @@ export default function App() {
         actualWeight: actual_weight,
         exercises: scheduled.exercises,
         existingLogs: logs,
+        logSplits,
       })
 
       setLogs((prev) => [...prev, log])
@@ -318,6 +316,104 @@ export default function App() {
     } catch (err) {
       console.error(err)
       setLogError(err.message || 'Could not save set — try again')
+    } finally {
+      setSavingLog(false)
+    }
+  }
+
+  async function handleSaveCardioSteady({
+    actualDurationSeconds,
+    actualDistance,
+    distanceUnit,
+  }) {
+    const scheduled = getScheduledBundle(scheduledId)
+    if (!scheduled || !workoutExerciseId) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+    setSavingLog(true)
+    setLogError(null)
+    try {
+      const existing = logs.find(
+        (l) => l.workout_exercise_id === workoutExerciseId,
+      )
+      const { log, completed } = await saveCardioLog({
+        scheduledWorkoutId: scheduled.id,
+        workoutExerciseId,
+        actualDurationSeconds,
+        actualDistance,
+        distanceUnit,
+        exercises: scheduled.exercises,
+        existingLogs: logs,
+        logSplits,
+        existingLogId: existing?.id ?? null,
+      })
+      setLogs((prev) => {
+        if (existing) return prev.map((l) => (l.id === log.id ? log : l))
+        return [...prev, log]
+      })
+      if (completed) {
+        setScheduledWorkouts((prev) =>
+          prev.map((sw) =>
+            sw.id === scheduled.id ? { ...sw, status: 'completed' } : sw,
+          ),
+        )
+        setJustCompleted(true)
+      }
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not save cardio — try again')
+    } finally {
+      setSavingLog(false)
+    }
+  }
+
+  async function handleSaveIntervalSplit({
+    splitNumber,
+    durationSeconds,
+    distance,
+    distanceUnit,
+  }) {
+    const scheduled = getScheduledBundle(scheduledId)
+    if (!scheduled || !workoutExerciseId) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+    setSavingLog(true)
+    setLogError(null)
+    try {
+      const existing = logs.find(
+        (l) => l.workout_exercise_id === workoutExerciseId,
+      )
+      const { log, completed, logSplits: nextSplits } = await saveIntervalSplit({
+        scheduledWorkoutId: scheduled.id,
+        workoutExerciseId,
+        splitNumber,
+        distance,
+        distanceUnit,
+        durationSeconds,
+        exercises: scheduled.exercises,
+        existingLogs: logs,
+        logSplits,
+        parentLogId: existing?.id ?? null,
+      })
+      setLogs((prev) =>
+        prev.some((l) => l.id === log.id) ? prev : [...prev, log],
+      )
+      setLogSplits(nextSplits)
+      if (completed) {
+        setScheduledWorkouts((prev) =>
+          prev.map((sw) =>
+            sw.id === scheduled.id ? { ...sw, status: 'completed' } : sw,
+          ),
+        )
+        setJustCompleted(true)
+      }
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not save split — try again')
     } finally {
       setSavingLog(false)
     }
@@ -481,6 +577,24 @@ export default function App() {
       const existingLogs = logs.filter(
         (l) => l.workout_exercise_id === workoutExerciseId,
       )
+      if (isCardioExercise(we)) {
+        return (
+          <LogCardio
+            key={we.id}
+            workoutExercise={we}
+            existingLogs={existingLogs}
+            logSplits={logSplits}
+            onBack={backToWorkout}
+            onSaveSteady={handleSaveCardioSteady}
+            onSaveSplit={handleSaveIntervalSplit}
+            onSaveRpe={handleSaveRpe}
+            saving={savingLog}
+            savingRpe={savingRpe}
+            error={logError}
+            initialShowRpe={logShowRpe}
+          />
+        )
+      }
       return (
         <LogSet
           key={we.id}
@@ -505,6 +619,7 @@ export default function App() {
       <WorkoutDetail
         scheduled={scheduled}
         logs={logs}
+        logSplits={logSplits}
         onBack={backToCalendar}
         onLogExercise={openLog}
         onSavePain={handleSavePain}

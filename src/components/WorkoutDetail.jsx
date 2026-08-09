@@ -1,14 +1,52 @@
 import { useState } from 'react'
 import {
-  loggedCountFor,
   exerciseRpe,
   exerciseHasPain,
   exercisePainNote,
+  exerciseProgress,
+  isCardioExercise,
+  isExerciseFullyLogged,
 } from '../lib/logging'
+import { formatDistance, formatDuration } from '../lib/units'
+
+function prescribeLabel(we) {
+  if (isCardioExercise(we)) {
+    if (we.is_interval) {
+      const splits = Array.isArray(we.target_splits) ? we.target_splits : []
+      const work = splits.filter((s) => (s.label || 'work') !== 'recovery')
+      const n = work.length || we.sets || splits.length
+      const sample = work[0] || splits[0]
+      const parts = [`${n} work splits`]
+      if (sample?.distance != null) {
+        parts.push(
+          formatDistance(sample.distance, sample.unit || we.distance_unit || 'mi'),
+        )
+      } else if (sample?.duration_seconds != null) {
+        parts.push(formatDuration(sample.duration_seconds))
+      }
+      if (sample?.target_pace) {
+        parts.push(`@ ${sample.target_pace}`)
+      }
+      if (we.weight_guidance) parts.push(we.weight_guidance)
+      return parts.join(' · ')
+    }
+    const parts = []
+    if (we.target_duration_seconds != null) {
+      parts.push(formatDuration(we.target_duration_seconds))
+    }
+    if (we.target_distance != null) {
+      parts.push(formatDistance(we.target_distance, we.distance_unit || 'mi'))
+    }
+    if (we.weight_guidance) parts.push(we.weight_guidance)
+    return parts.join(' · ') || 'Cardio'
+  }
+  return `${we.sets} × ${we.reps} · ${we.weight_guidance}`
+}
 
 export default function WorkoutDetail({
   scheduled,
   logs,
+  logSplits = [],
   onBack,
   onLogExercise,
   onSavePain,
@@ -20,12 +58,16 @@ export default function WorkoutDetail({
   const [painOpenId, setPainOpenId] = useState(null)
   const [painDraft, setPainDraft] = useState('')
 
-  const totalSets = exercises.reduce((sum, we) => sum + we.sets, 0)
-  const loggedSets = exercises.reduce(
-    (sum, we) => sum + Math.min(loggedCountFor(logs, we.id), we.sets),
-    0,
-  )
-  const allDone = status === 'completed' || loggedSets >= totalSets
+  let doneUnits = 0
+  let totalUnits = 0
+  for (const we of exercises) {
+    const { done, total } = exerciseProgress(we, logs, logSplits)
+    doneUnits += done
+    totalUnits += total
+  }
+  const allDone =
+    status === 'completed' ||
+    exercises.every((we) => isExerciseFullyLogged(we, logs, logSplits))
 
   function openPain(weId) {
     setPainOpenId(weId)
@@ -65,13 +107,13 @@ export default function WorkoutDetail({
           {workout.focus}
         </h1>
         <p className="mt-2 font-mono text-xs text-muted">
-          {loggedSets}/{totalSets} sets logged
+          {doneUnits}/{totalUnits} logged
         </p>
       </header>
 
       {(justCompleted || allDone) && (
         <p className="mb-4 rounded border border-success-border/55 bg-surface-alt px-3 py-3 text-sm text-success">
-          Workout complete — nice work. Tap any set to edit.
+          Workout complete — nice work. Tap any item to edit.
         </p>
       )}
 
@@ -83,15 +125,20 @@ export default function WorkoutDetail({
 
       <ul className="space-y-3">
         {exercises.map((we, index) => {
+          const cardio = isCardioExercise(we)
+          const { done, total } = exerciseProgress(we, logs, logSplits)
+          const exerciseDone = isExerciseFullyLogged(we, logs, logSplits)
           const logged = logs
             .filter((l) => l.workout_exercise_id === we.id)
             .sort((a, b) => a.set_number - b.set_number)
-          const count = logged.length
-          const exerciseDone = count >= we.sets
           const rpe = exerciseRpe(logs, we.id)
           const hasPain = exerciseHasPain(logs, we.id)
           const painOpen = painOpenId === we.id
           const savingThis = savingPainId === we.id
+          const parentIds = new Set(logged.map((l) => l.id))
+          const splits = (logSplits ?? []).filter((s) =>
+            parentIds.has(s.log_id),
+          )
 
           return (
             <li
@@ -101,40 +148,74 @@ export default function WorkoutDetail({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-xs text-muted">
-                    Exercise {index + 1}
+                    {cardio ? 'Cardio' : 'Exercise'} {index + 1}
                   </div>
                   <div className="font-display font-medium">
                     {we.exercise?.name ?? 'Exercise'}
                   </div>
                   <div className="mt-1 text-sm text-muted">
-                    {we.sets} × {we.reps} · {we.weight_guidance}
+                    {prescribeLabel(we)}
                   </div>
                   {we.notes ? (
                     <div className="mt-1 text-sm text-muted">{we.notes}</div>
                   ) : null}
-                  {count > 0 && (
+                  {done > 0 && (
                     <div className="mt-2 space-y-1.5">
                       <div className="text-xs text-success/85">
-                        Logged {Math.min(count, we.sets)}/{we.sets} sets
+                        Logged {done}/{total}
+                        {cardio
+                          ? we.is_interval
+                            ? ' splits'
+                            : ' session'
+                          : ' sets'}
                       </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {logged.slice(0, we.sets).map((l) => (
-                          <button
-                            key={l.id}
-                            type="button"
-                            onClick={() =>
-                              onLogExercise(we.id, { editLogId: l.id })
-                            }
-                            className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success hover:border-success-border hover:text-ink"
-                            aria-label={`Edit set ${l.set_number}`}
-                          >
-                            #{l.set_number}: {l.actual_reps}
-                            {l.actual_weight != null
-                              ? `x${l.actual_weight}`
-                              : ''}
-                          </button>
-                        ))}
-                      </div>
+                      {!cardio ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {logged.slice(0, we.sets).map((l) => (
+                            <button
+                              key={l.id}
+                              type="button"
+                              onClick={() =>
+                                onLogExercise(we.id, { editLogId: l.id })
+                              }
+                              className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success hover:border-success-border hover:text-ink"
+                              aria-label={`Edit set ${l.set_number}`}
+                            >
+                              #{l.set_number}: {l.actual_reps}
+                              {l.actual_weight != null
+                                ? `x${l.actual_weight}`
+                                : ''}
+                            </button>
+                          ))}
+                        </div>
+                      ) : we.is_interval ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {splits.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => onLogExercise(we.id)}
+                              className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
+                            >
+                              #{s.split_number}
+                              {s.pace ? `: ${s.pace}` : ''}
+                            </button>
+                          ))}
+                        </div>
+                      ) : logged[0] ? (
+                        <button
+                          type="button"
+                          onClick={() => onLogExercise(we.id)}
+                          className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
+                        >
+                          {logged[0].actual_duration_seconds != null
+                            ? formatDuration(logged[0].actual_duration_seconds)
+                            : '—'}
+                          {logged[0].actual_distance != null
+                            ? ` · ${formatDistance(logged[0].actual_distance, logged[0].distance_unit || 'mi')}`
+                            : ''}
+                        </button>
+                      ) : null}
                       {exerciseDone ? (
                         <button
                           type="button"
@@ -165,7 +246,7 @@ export default function WorkoutDetail({
                     onClick={() => onLogExercise(we.id)}
                     className="rounded bg-orange px-3 py-1.5 text-sm font-medium text-on-orange hover:bg-orange-dim"
                   >
-                    {exerciseDone ? 'Edit' : count > 0 ? 'Continue' : 'Log'}
+                    {exerciseDone ? 'Edit' : done > 0 ? 'Continue' : 'Log'}
                   </button>
                   {exerciseDone ? (
                     <button
@@ -200,7 +281,7 @@ export default function WorkoutDetail({
                     value={painDraft}
                     onChange={(e) => setPainDraft(e.target.value)}
                     rows={2}
-                    placeholder="e.g. left shoulder on the press"
+                    placeholder="e.g. left knee on the run"
                     className="w-full rounded border border-orange-dim/50 bg-bg px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
                   />
                   <div className="flex flex-wrap gap-2">

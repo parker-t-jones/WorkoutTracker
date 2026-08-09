@@ -9,7 +9,12 @@ create table if not exists users (
   experience_level text,
   days_per_week integer,
   equipment_access text,
-  limitations text
+  limitations text,
+  age integer,
+  bodyweight numeric,
+  bodyweight_unit text check (bodyweight_unit is null or bodyweight_unit in ('lb', 'kg')),
+  session_length text,
+  additional_notes text
 );
 
 create table if not exists exercises (
@@ -18,7 +23,9 @@ create table if not exists exercises (
   movement_pattern text not null,
   muscle_group text not null,
   equipment_required text,
-  contraindication_tags text[] not null default '{}'::text[]
+  contraindication_tags text[] not null default '{}'::text[],
+  modality text not null default 'strength' check (modality in ('strength', 'cardio')),
+  typically_interval boolean not null default false
 );
 
 create table if not exists workouts (
@@ -44,7 +51,12 @@ create table if not exists workout_exercises (
   sets integer not null,
   reps text not null,
   weight_guidance text not null,
-  notes text not null default ''
+  notes text not null default '',
+  target_duration_seconds integer,
+  target_distance numeric,
+  distance_unit text default 'mi' check (distance_unit is null or distance_unit in ('mi', 'km')),
+  is_interval boolean not null default false,
+  target_splits jsonb
 );
 
 create table if not exists logs (
@@ -52,12 +64,27 @@ create table if not exists logs (
   workout_exercise_id uuid not null references workout_exercises(id) on delete cascade,
   user_id uuid not null references users(id) on delete cascade,
   set_number integer not null,
-  actual_reps integer not null,
+  actual_reps integer default 0,
   actual_weight numeric,
+  actual_duration_seconds integer,
+  actual_distance numeric,
+  distance_unit text check (distance_unit is null or distance_unit in ('mi', 'km')),
   rpe integer check (rpe is null or (rpe >= 1 and rpe <= 10)),
   pain_flag boolean not null default false,
   pain_note text,
   completed_at timestamptz not null default now()
+);
+
+create table if not exists log_splits (
+  id uuid primary key default gen_random_uuid(),
+  log_id uuid not null references logs(id) on delete cascade,
+  split_number integer not null check (split_number >= 1),
+  distance numeric,
+  distance_unit text check (distance_unit is null or distance_unit in ('mi', 'km')),
+  duration_seconds integer,
+  pace text,
+  created_at timestamptz not null default now(),
+  unique (log_id, split_number)
 );
 
 -- Ranked alternate exercises for safe in-session / adaptive swaps.

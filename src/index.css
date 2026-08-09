@@ -114,6 +114,37 @@ h3,
   letter-spacing: 0.01em;
 }
 
+/* Onboarding step enter animation */
+@keyframes onboarding-in-forward {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes onboarding-in-back {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.onboarding-step-forward {
+  animation: onboarding-in-forward 220ms ease-out;
+}
+
+.onboarding-step-back {
+  animation: onboarding-in-back 220ms ease-out;
+}
+
 /* Thin diagonal hazard stripe — active/in-progress workout card only */
 .hazard-stripe {
   position: relative;

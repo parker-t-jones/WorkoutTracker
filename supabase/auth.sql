@@ -31,6 +31,7 @@ alter table public.workouts enable row level security;
 alter table public.scheduled_workouts enable row level security;
 alter table public.workout_exercises enable row level security;
 alter table public.logs enable row level security;
+alter table public.log_splits enable row level security;
 alter table public.substitutions enable row level security;
 alter table public.proposed_substitutions enable row level security;
 
@@ -217,3 +218,56 @@ create policy logs_update_own on public.logs
 create policy logs_delete_own on public.logs
   for delete to authenticated
   using (user_id = auth.uid());
+
+-- log_splits (ownership via parent log.user_id)
+drop policy if exists log_splits_select_own on public.log_splits;
+drop policy if exists log_splits_insert_own on public.log_splits;
+drop policy if exists log_splits_update_own on public.log_splits;
+drop policy if exists log_splits_delete_own on public.log_splits;
+
+create policy log_splits_select_own on public.log_splits
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.logs l
+      where l.id = log_splits.log_id
+        and l.user_id = auth.uid()
+    )
+  );
+
+create policy log_splits_insert_own on public.log_splits
+  for insert to authenticated
+  with check (
+    exists (
+      select 1 from public.logs l
+      where l.id = log_splits.log_id
+        and l.user_id = auth.uid()
+    )
+  );
+
+create policy log_splits_update_own on public.log_splits
+  for update to authenticated
+  using (
+    exists (
+      select 1 from public.logs l
+      where l.id = log_splits.log_id
+        and l.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.logs l
+      where l.id = log_splits.log_id
+        and l.user_id = auth.uid()
+    )
+  );
+
+create policy log_splits_delete_own on public.log_splits
+  for delete to authenticated
+  using (
+    exists (
+      select 1 from public.logs l
+      where l.id = log_splits.log_id
+        and l.user_id = auth.uid()
+    )
+  );

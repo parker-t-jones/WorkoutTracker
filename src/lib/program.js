@@ -1,5 +1,10 @@
 import { supabase } from './supabase'
 import { normalizeExerciseName, scheduleDateFor, nextMonday } from './user'
+import { getDistanceUnit } from './units'
+import {
+  ensureCardioWarmup,
+  normalizeCardioExercise,
+} from './cardioPrescription'
 import {
   groupByWeekNumber,
   maxWeekNumber,
@@ -44,6 +49,7 @@ export async function loadProgramData(userId) {
       workouts: [],
       workoutDetails: {},
       logs: [],
+      logSplits: [],
     }
   }
 
@@ -65,6 +71,7 @@ export async function loadProgramData(userId) {
 
   const weIds = (workoutExercises ?? []).map((we) => we.id)
   let logs = []
+  let logSplits = []
   if (weIds.length > 0) {
     const { data: logRows, error: logErr } = await client
       .from('logs')
@@ -75,6 +82,17 @@ export async function loadProgramData(userId) {
 
     if (logErr) throw logErr
     logs = logRows ?? []
+
+    const logIds = logs.map((l) => l.id)
+    if (logIds.length > 0) {
+      const { data: splitRows, error: splitErr } = await client
+        .from('log_splits')
+        .select('*')
+        .in('log_id', logIds)
+        .order('split_number', { ascending: true })
+      if (splitErr) throw splitErr
+      logSplits = splitRows ?? []
+    }
   }
 
   const workoutDetails = {}
@@ -91,6 +109,7 @@ export async function loadProgramData(userId) {
     workouts: workouts ?? [],
     workoutDetails,
     logs,
+    logSplits,
   }
 }
 
@@ -111,6 +130,11 @@ async function ensureUser(userId, answers) {
     days_per_week: answers.days_per_week,
     equipment_access: answers.equipment,
     limitations: answers.limitations || null,
+    age: answers.age != null ? Number(answers.age) : null,
+    bodyweight: answers.bodyweight != null ? Number(answers.bodyweight) : null,
+    bodyweight_unit: answers.bodyweight_unit || null,
+    session_length: answers.session_length || null,
+    additional_notes: answers.additional_notes || null,
   }
 
   if (existing) {
@@ -256,20 +280,53 @@ async function insertProgramWeeks({
 
       if (wErr) throw wErr
 
+      const distanceUnit = getDistanceUnit()
+      ensureCardioWarmup(day, distanceUnit)
+
       const weRows = []
-      for (const ex of day.exercises) {
+      for (const raw of day.exercises) {
+        const catalogEx = catalogByNorm.get(
+          normalizeExerciseName(raw.name),
+        )
+        const ex = normalizeCardioExercise(raw, catalogEx, distanceUnit)
         const exerciseId = await resolveExerciseId(
           ex.name,
           catalog,
           catalogByNorm,
         )
+        const modality = ex.modality === 'cardio' ? 'cardio' : 'strength'
+        const isInterval = Boolean(ex.is_interval)
         weRows.push({
           workout_id: workout.id,
           exercise_id: exerciseId,
-          sets: ex.sets,
-          reps: String(ex.reps),
-          weight_guidance: ex.weight_guidance,
+          sets: Number(ex.sets) || (modality === 'cardio' ? 1 : 3),
+          reps: String(
+            modality === 'cardio' ? '—' : (ex.reps ?? '8'),
+          ),
+          weight_guidance: String(
+            ex.weight_guidance ??
+              (modality === 'cardio' ? 'steady' : 'moderate'),
+          ),
           notes: ex.notes ?? '',
+          target_duration_seconds:
+            modality === 'cardio' && ex.target_duration_seconds != null
+              ? Number(ex.target_duration_seconds)
+              : null,
+          target_distance:
+            modality === 'cardio' && ex.target_distance != null
+              ? Number(ex.target_distance)
+              : null,
+          distance_unit:
+            modality === 'cardio'
+              ? ex.distance_unit === 'km' || ex.distance_unit === 'mi'
+                ? ex.distance_unit
+                : distanceUnit
+              : null,
+          is_interval: isInterval,
+          target_splits:
+            modality === 'cardio' && Array.isArray(ex.target_splits)
+              ? ex.target_splits
+              : null,
         })
       }
 
@@ -311,6 +368,19 @@ export async function generateAndSaveProgram(formAnswers, userId) {
     days_per_week: formAnswers.days_per_week,
     equipment: formAnswers.equipment,
     limitations: formAnswers.limitations || '',
+    additional_notes: formAnswers.additional_notes || '',
+    age: formAnswers.age,
+    bodyweight: formAnswers.bodyweight,
+    bodyweight_unit: formAnswers.bodyweight_unit || 'lb',
+    session_length: formAnswers.session_length || '',
+    distance_unit: getDistanceUnit(),
+    exercise_catalog: catalog.map((e) => ({
+      name: e.name,
+      modality: e.modality ?? 'strength',
+      typically_interval: Boolean(e.typically_interval),
+      equipment_required: e.equipment_required ?? null,
+      movement_pattern: e.movement_pattern,
+    })),
     exercise_names: catalog.map((e) => e.name),
   })
 
@@ -354,7 +424,8 @@ async function fetchSubstitutionsByPrimaryIds(exerciseIds) {
         name,
         equipment_required,
         contraindication_tags,
-        movement_pattern
+        movement_pattern,
+        modality
       )
     `,
     )
@@ -411,10 +482,24 @@ export async function generateAndSaveNextWeek({
   const weekEntry = byWeek.get(maxWeek)
   if (!weekEntry) throw new Error(GENERATE_ERROR)
 
+  const logIds = (logs ?? []).map((l) => l.id)
+  let logSplits = []
+  if (logIds.length > 0) {
+    const client = assertSupabase()
+    const { data: splitRows, error: splitErr } = await client
+      .from('log_splits')
+      .select('*')
+      .in('log_id', logIds)
+      .order('split_number', { ascending: true })
+    if (splitErr) throw splitErr
+    logSplits = splitRows ?? []
+  }
+
   const built = buildPriorWeekAdaptation({
     weekNumber: maxWeek,
     weekWorkouts: weekEntry.workouts,
     logs,
+    logSplits,
   })
 
   const profile = await fetchUserProfile(userId)
@@ -442,6 +527,19 @@ export async function generateAndSaveNextWeek({
     days_per_week: profile.days_per_week,
     equipment: profile.equipment_access,
     limitations: profile.limitations || '',
+    additional_notes: profile.additional_notes || '',
+    age: profile.age,
+    bodyweight: profile.bodyweight,
+    bodyweight_unit: profile.bodyweight_unit || 'lb',
+    session_length: profile.session_length || '',
+    distance_unit: getDistanceUnit(),
+    exercise_catalog: catalog.map((e) => ({
+      name: e.name,
+      modality: e.modality ?? 'strength',
+      typically_interval: Boolean(e.typically_interval),
+      equipment_required: e.equipment_required ?? null,
+      movement_pattern: e.movement_pattern,
+    })),
     exercise_names: catalog.map((e) => e.name),
     next_week_number: nextWeek,
     prior_week_program,

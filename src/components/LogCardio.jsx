@@ -5,12 +5,77 @@ import {
   prescribedSplitCount,
 } from '../lib/logging'
 import {
+  combineDurationFields,
   computePace,
   formatDuration,
   formatDistance,
   getDistanceUnit,
-  parseDurationInput,
+  splitDurationFields,
 } from '../lib/units'
+
+function sanitizeMinutes(raw) {
+  const digits = String(raw).replace(/\D/g, '')
+  return digits
+}
+
+function sanitizeSeconds(raw) {
+  const digits = String(raw).replace(/\D/g, '')
+  if (digits === '') return ''
+  const n = Number(digits)
+  if (!Number.isFinite(n)) return ''
+  return String(Math.min(59, n))
+}
+
+/** Dual Min / Sec numeric inputs — mobile-friendly (no colon needed). */
+function DurationMinSecFields({
+  minutes,
+  seconds,
+  onMinutesChange,
+  onSecondsChange,
+  size = 'lg',
+}) {
+  const inputClass =
+    size === 'sm'
+      ? 'w-full rounded border border-orange-dim/50 bg-bg px-2 py-2 font-mono text-sm tabular-nums text-ink'
+      : 'w-full rounded border border-orange-dim/50 bg-surface px-3 py-3 font-mono text-xl tabular-nums text-ink'
+  const labelClass = size === 'sm' ? 'text-xs text-muted' : 'text-xs text-muted'
+
+  return (
+    <div className="space-y-2">
+      <span className={size === 'sm' ? 'text-xs text-muted' : 'text-sm font-medium'}>
+        Duration
+      </span>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block space-y-1">
+          <span className={labelClass}>Min</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            placeholder="0"
+            value={minutes}
+            onChange={(e) => onMinutesChange(sanitizeMinutes(e.target.value))}
+            className={inputClass}
+            aria-label="Minutes"
+          />
+        </label>
+        <label className="block space-y-1">
+          <span className={labelClass}>Sec</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            placeholder="0"
+            value={seconds}
+            onChange={(e) => onSecondsChange(sanitizeSeconds(e.target.value))}
+            className={inputClass}
+            aria-label="Seconds"
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
 
 function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
   return (
@@ -79,13 +144,22 @@ function SteadyCardioForm({
   error,
   onSave,
 }) {
-  const [durationText, setDurationText] = useState(() =>
-    existingLog?.actual_duration_seconds != null
-      ? formatDuration(existingLog.actual_duration_seconds)
-      : workoutExercise.target_duration_seconds != null
-        ? formatDuration(workoutExercise.target_duration_seconds)
-        : '',
-  )
+  const [minutes, setMinutes] = useState(() => {
+    const split = splitDurationFields(
+      existingLog?.actual_duration_seconds ??
+        workoutExercise.target_duration_seconds ??
+        null,
+    )
+    return split.minutes
+  })
+  const [seconds, setSeconds] = useState(() => {
+    const split = splitDurationFields(
+      existingLog?.actual_duration_seconds ??
+        workoutExercise.target_duration_seconds ??
+        null,
+    )
+    return split.seconds
+  })
   const [distanceText, setDistanceText] = useState(() =>
     existingLog?.actual_distance != null
       ? String(existingLog.actual_distance)
@@ -94,7 +168,7 @@ function SteadyCardioForm({
         : '',
   )
 
-  const durationSec = parseDurationInput(durationText)
+  const durationSec = combineDurationFields(minutes, seconds)
   const distance = Number(distanceText)
   const pace =
     durationSec != null && Number.isFinite(distance) && distance > 0
@@ -125,18 +199,13 @@ function SteadyCardioForm({
         </div>
       </div>
 
-      <label className="block space-y-2">
-        <span className="text-sm font-medium">Duration</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          placeholder="mm:ss"
-          value={durationText}
-          onChange={(e) => setDurationText(e.target.value)}
-          className="w-full rounded border border-orange-dim/50 bg-surface px-3 py-3 font-mono text-xl tabular-nums text-ink"
-        />
-        <span className="text-xs text-muted">Use mm:ss or total seconds</span>
-      </label>
+      <DurationMinSecFields
+        minutes={minutes}
+        seconds={seconds}
+        onMinutesChange={setMinutes}
+        onSecondsChange={setSeconds}
+        size="lg"
+      />
 
       <label className="block space-y-2">
         <span className="text-sm font-medium">Distance ({unit})</span>
@@ -213,13 +282,12 @@ function IntervalSplitsTable({
   useEffect(() => {
     const next = {}
     for (const row of rows) {
+      const split = splitDurationFields(
+        row.logged?.duration_seconds ?? row.target.duration_seconds ?? null,
+      )
       next[row.n] = {
-        duration:
-          row.logged?.duration_seconds != null
-            ? formatDuration(row.logged.duration_seconds)
-            : row.target.duration_seconds != null
-              ? formatDuration(row.target.duration_seconds)
-              : '',
+        minutes: split.minutes,
+        seconds: split.seconds,
         distance:
           row.logged?.distance != null
             ? String(row.logged.distance)
@@ -245,8 +313,12 @@ function IntervalSplitsTable({
       </p>
       <ul className="space-y-2">
         {rows.map(({ n, target, logged }) => {
-          const draft = drafts[n] ?? { duration: '', distance: '' }
-          const dur = parseDurationInput(draft.duration)
+          const draft = drafts[n] ?? {
+            minutes: '',
+            seconds: '',
+            distance: '',
+          }
+          const dur = combineDurationFields(draft.minutes, draft.seconds)
           const dist = Number(draft.distance)
           const pace =
             dur != null && Number.isFinite(dist) && dist > 0
@@ -274,20 +346,14 @@ function IntervalSplitsTable({
                         : '—'}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block space-y-1">
-                  <span className="text-xs text-muted">Duration</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="mm:ss"
-                    value={draft.duration}
-                    onChange={(e) =>
-                      patchDraft(n, { duration: e.target.value })
-                    }
-                    className="w-full rounded border border-orange-dim/50 bg-bg px-2 py-2 font-mono text-sm tabular-nums text-ink"
-                  />
-                </label>
+              <div className="space-y-2">
+                <DurationMinSecFields
+                  minutes={draft.minutes}
+                  seconds={draft.seconds}
+                  onMinutesChange={(v) => patchDraft(n, { minutes: v })}
+                  onSecondsChange={(v) => patchDraft(n, { seconds: v })}
+                  size="sm"
+                />
                 <label className="block space-y-1">
                   <span className="text-xs text-muted">Dist ({unit})</span>
                   <input

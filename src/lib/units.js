@@ -62,6 +62,36 @@ export function parseDurationInput(raw) {
   return null
 }
 
+/** Split total seconds into minutes / seconds string fields for dual inputs. */
+export function splitDurationFields(totalSeconds) {
+  if (totalSeconds == null || !Number.isFinite(Number(totalSeconds))) {
+    return { minutes: '', seconds: '' }
+  }
+  const s = Math.max(0, Math.round(Number(totalSeconds)))
+  return {
+    minutes: String(Math.floor(s / 60)),
+    seconds: String(s % 60),
+  }
+}
+
+/**
+ * Combine minutes + seconds field values into total seconds.
+ * Seconds are clamped to 0–59. Empty both → null.
+ */
+export function combineDurationFields(minutes, seconds) {
+  const mRaw = String(minutes ?? '').trim()
+  const sRaw = String(seconds ?? '').trim()
+  if (!mRaw && !sRaw) return null
+  const m = mRaw === '' ? 0 : Number(mRaw)
+  const sec = sRaw === '' ? 0 : Number(sRaw)
+  if (!Number.isFinite(m) || m < 0 || !Number.isFinite(sec) || sec < 0) {
+    return null
+  }
+  const mins = Math.floor(m)
+  const secs = Math.min(59, Math.floor(sec))
+  return mins * 60 + secs
+}
+
 /** Pace as m:ss per distance unit (e.g. "7:30"). */
 export function computePace(durationSeconds, distance) {
   const dur = Number(durationSeconds)

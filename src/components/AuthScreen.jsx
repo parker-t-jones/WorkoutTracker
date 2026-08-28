@@ -6,7 +6,28 @@ import {
   updatePassword,
 } from '../lib/auth'
 
-export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
+const ROLES = [
+  {
+    id: 'athlete',
+    label: 'Sign in as an Athlete',
+    hint: 'Train, log, and track your program.',
+  },
+  {
+    id: 'coach',
+    label: 'Sign in as a Coach',
+    hint: 'Manage athletes and their programs.',
+  },
+]
+
+export default function AuthScreen({
+  mode: initialMode = 'login',
+  onAuthed,
+  selectedRole = null,
+  onSelectRole,
+  onBackToRoles,
+  roleDenied = false,
+  onUseDifferentAccount,
+}) {
   const [mode, setMode] = useState(initialMode) // login | signup | forgot | recovery
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -51,6 +72,62 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  const showLanding =
+    mode !== 'recovery' && (roleDenied || !selectedRole)
+
+  if (showLanding) {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-12">
+        <header className="mb-8">
+          <h1 className="font-display text-2xl font-semibold tracking-tight">
+            Workout Tracker
+          </h1>
+          <p className="mt-2 text-sm text-muted">
+            Choose how you want to sign in.
+          </p>
+        </header>
+
+        {roleDenied ? (
+          <p
+            role="alert"
+            className="mb-6 rounded bg-danger-bg px-3 py-2 text-sm text-danger"
+          >
+            This account isn’t set up as a coach yet. Sign in as an Athlete,
+            or use a different account.
+          </p>
+        ) : null}
+
+        <div className="space-y-3">
+          {ROLES.map((role) => (
+            <button
+              key={role.id}
+              type="button"
+              onClick={() => onSelectRole?.(role.id)}
+              className="w-full rounded border border-orange-dim/50 bg-surface px-4 py-5 text-left hover:border-orange"
+            >
+              <div className="font-display text-lg font-semibold tracking-tight">
+                {role.label}
+              </div>
+              <div className="mt-1 text-sm text-muted">{role.hint}</div>
+            </button>
+          ))}
+        </div>
+
+        {roleDenied && onUseDifferentAccount ? (
+          <div className="mt-6 text-center text-sm text-muted">
+            <button
+              type="button"
+              className="underline hover:text-ink"
+              onClick={onUseDifferentAccount}
+            >
+              Use a different account
+            </button>
+          </div>
+        ) : null}
+      </div>
+    )
   }
 
   const title =
@@ -159,6 +236,22 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
       </form>
 
       <div className="mt-6 space-y-2 text-center text-sm text-muted">
+        {mode !== 'recovery' && onBackToRoles ? (
+          <div>
+            <button
+              type="button"
+              className="underline hover:text-ink"
+              onClick={() => {
+                setMode('login')
+                setError(null)
+                setInfo(null)
+                onBackToRoles()
+              }}
+            >
+              ← Back
+            </button>
+          </div>
+        ) : null}
         {mode === 'login' && (
           <>
             <button

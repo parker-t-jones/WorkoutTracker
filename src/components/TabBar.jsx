@@ -1,13 +1,13 @@
 import { Calendar, TrendingUp, Trophy, User } from 'lucide-react'
 
-const tabs = [
+const DEFAULT_TABS = [
   { id: 'calendar', label: 'Calendar', Icon: Calendar },
   { id: 'progress', label: 'Progress', Icon: TrendingUp },
   { id: 'leaderboard', label: 'Leaderboard', Icon: Trophy },
   { id: 'account', label: 'Account', Icon: User },
 ]
 
-export default function TabBar({ active, onChange }) {
+export default function TabBar({ active, onChange, tabs = DEFAULT_TABS }) {
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-40 border-t border-orange-dim/25 bg-surface shadow-[0_-4px_16px_rgb(0_0_0/0.18)]"

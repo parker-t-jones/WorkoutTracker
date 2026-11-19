@@ -1,5 +1,12 @@
 import { supabase } from './supabase'
-import { normalizeExerciseName, scheduleDateFor, nextMonday } from './user'
+import {
+  normalizeExerciseName,
+  scheduleDateFor,
+  nextMonday,
+  firstWeekScheduleDates,
+  START_TODAY,
+  START_NEXT_MONDAY,
+} from './user'
 import { getDistanceUnit, getWeightUnit } from './units'
 import {
   ensureCardioWarmup,
@@ -346,6 +353,9 @@ async function insertProgramWeeks({
   /** When true, schedule dates as if this is week 1 relative to startMonday
    *  (used when appending adaptive weeks whose Monday is already week N's start). */
   relativeToStartMonday = false,
+  /** Explicit YYYY-MM-DD per day index for a single-week program (onboarding
+   *  "start today"). Overrides startMonday + trainingDayOffsets. */
+  scheduleDates = null,
 }) {
   const client = assertSupabase()
   const catalog = await fetchExerciseCatalog()
@@ -378,17 +388,10 @@ async function insertProgramWeeks({
       }
 
       const scheduleWeekNumber = relativeToStartMonday ? 1 : week.week_number
-      planned.push({
-        week,
-        day,
-        exercises,
-        date: scheduleDateFor(
-          scheduleWeekNumber,
-          dayIndex,
-          daysPerWeek,
-          startMonday,
-        ),
-      })
+      const date = scheduleDates?.length
+        ? scheduleDates[Math.min(dayIndex, scheduleDates.length - 1)]
+        : scheduleDateFor(scheduleWeekNumber, dayIndex, daysPerWeek, startMonday)
+      planned.push({ week, day, exercises, date })
     }
   }
 
@@ -510,14 +513,27 @@ export async function generateAndSaveProgram(formAnswers, userId) {
     program.weeks = [program.weeks[0]]
   }
 
-  const startMonday = nextMonday()
   const daysPerWeek = Number(formAnswers.days_per_week)
+  // "today": week 1 starts today, with no day before today (see
+  // firstWeekScheduleDates). "next_monday": the following Monday. Without a
+  // choice keep the old behaviour (nextMonday(): today on a Monday, else the
+  // coming Monday). Week 2 is scheduled from the Monday after week 1's last
+  // date by nextWeekStartMonday, so every mode chains correctly.
+  const startMode =
+    formAnswers.start_mode === START_TODAY ||
+    formAnswers.start_mode === START_NEXT_MONDAY
+      ? formAnswers.start_mode
+      : new Date().getDay() === 1
+        ? START_TODAY
+        : START_NEXT_MONDAY
+  const scheduleDates = firstWeekScheduleDates(daysPerWeek, startMode)
 
   await insertProgramWeeks({
     userId: user.id,
     program,
     daysPerWeek,
-    startMonday,
+    startMonday: nextMonday(),
+    scheduleDates,
   })
 
   return user.id

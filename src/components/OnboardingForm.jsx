@@ -1,4 +1,11 @@
 import { useEffect, useState } from 'react'
+import {
+  START_NEXT_MONDAY,
+  START_TODAY,
+  defaultStartMode,
+  firstWeekScheduleDates,
+} from '../lib/user'
+import { formatDateKey } from '../lib/dates'
 
 const GOALS = [
   { id: 'strength', label: 'Strength' },
@@ -36,6 +43,7 @@ const STEPS = [
   { key: 'goal', title: 'What’s your main goal?', required: true },
   { key: 'level', title: 'What’s your fitness level?', required: true },
   { key: 'days', title: 'Days per week available?', required: true },
+  { key: 'start', title: 'When do you want to start?', required: true },
   { key: 'session', title: 'How long is a typical session?', required: true },
   { key: 'equipment', title: 'What equipment do you have?', required: true },
   {
@@ -128,6 +136,39 @@ function ChoiceList({ name, options, value, onChange, disabled }) {
   )
 }
 
+/** "Start today" vs "Start next Monday", each previewing its first-week dates. */
+function StartChoice({ daysPerWeek, value, onChange, disabled }) {
+  const options = [START_TODAY, START_NEXT_MONDAY].map((mode) => {
+    const dates = firstWeekScheduleDates(daysPerWeek, mode)
+    return {
+      id: mode,
+      label:
+        mode === START_TODAY
+          ? 'Start today'
+          : `Start next Monday (${formatDateKey(dates[0], { weekday: false })})`,
+      hint: dates.map((d) => formatDateKey(d)).join(' · '),
+    }
+  })
+  return (
+    <div className="space-y-3">
+      <ChoiceList
+        name="start_mode"
+        options={options.map(({ id, label }) => ({ id, label }))}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+      />
+      {options
+        .filter((o) => o.id === value)
+        .map((o) => (
+          <p key={o.id} className="text-xs text-muted">
+            Week 1: <span className="font-mono">{o.hint}</span>
+          </p>
+        ))}
+    </div>
+  )
+}
+
 function isStepValid(stepKey, answers) {
   switch (stepKey) {
     case 'age': {
@@ -146,6 +187,11 @@ function isStepValid(stepKey, answers) {
       return Boolean(answers.experience_level)
     case 'days':
       return Boolean(answers.days_per_week)
+    case 'start':
+      return (
+        answers.start_mode === START_TODAY ||
+        answers.start_mode === START_NEXT_MONDAY
+      )
     case 'session':
       return Boolean(answers.session_length)
     case 'equipment':
@@ -171,6 +217,7 @@ function buildSubmitAnswers(answers) {
     goal,
     experience_level: answers.experience_level,
     days_per_week: Number(answers.days_per_week),
+    start_mode: answers.start_mode,
     session_length: answers.session_length,
     equipment: answers.equipment,
     limitations: String(answers.limitations || '').trim(),
@@ -197,6 +244,7 @@ export default function OnboardingForm({
     goalOther: '',
     experience_level: '',
     days_per_week: '4',
+    start_mode: defaultStartMode(),
     session_length: '',
     equipment: '',
     limitations: '',
@@ -431,6 +479,15 @@ export default function OnboardingForm({
                 ))}
               </select>
             </label>
+          ) : null}
+
+          {current.key === 'start' ? (
+            <StartChoice
+              daysPerWeek={Number(answers.days_per_week)}
+              value={answers.start_mode}
+              onChange={(start_mode) => patch({ start_mode })}
+              disabled={submitting}
+            />
           ) : null}
 
           {current.key === 'session' ? (

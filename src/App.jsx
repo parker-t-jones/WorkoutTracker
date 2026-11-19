@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import CalendarView from './components/CalendarView'
 import WorkoutDetail from './components/WorkoutDetail'
+import HistoryView from './components/HistoryView'
 import LogSet from './components/LogSet'
 import LogCardio from './components/LogCardio'
 import OnboardingForm from './components/OnboardingForm'
@@ -36,6 +37,7 @@ import {
 } from './lib/logging'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
 import { workoutExerciseIndex } from './lib/progress'
+import { buildScheduledProgress } from './lib/schedule'
 
 export default function App() {
   const [bootstrapping, setBootstrapping] = useState(true)
@@ -62,7 +64,14 @@ export default function App() {
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
 
-  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | coach | workout | log | week-summary | proposals
+  const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | coach | workout | log | week-summary | proposals
+  // Where "back" from a workout goes (it can be opened from the history list).
+  const [workoutReturnView, setWorkoutReturnView] = useState('calendar')
+  // Month shown in the calendar grid — kept here so it survives opening a workout.
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
   const [editLogId, setEditLogId] = useState(null)
@@ -286,9 +295,10 @@ export default function App() {
     refreshRef.current(user)
   }
 
-  function getWorkout(workoutId) {
-    return workoutsById[workoutId]
-  }
+  const getWorkout = useCallback(
+    (workoutId) => workoutsById[workoutId],
+    [workoutsById],
+  )
 
   function getScheduledBundle(id) {
     const sw = scheduledWorkouts.find((s) => s.id === id)
@@ -303,6 +313,7 @@ export default function App() {
   }
 
   function openWorkout(id) {
+    setWorkoutReturnView(view === 'history' ? 'history' : 'calendar')
     setScheduledId(id)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -321,7 +332,7 @@ export default function App() {
   }
 
   function backToCalendar() {
-    setView('calendar')
+    setView(workoutReturnView === 'history' ? 'history' : 'calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -625,6 +636,13 @@ export default function App() {
     [scheduledWorkouts, workoutDetails],
   )
 
+  // scheduled id → { done, total, exerciseCount } for calendar/history status.
+  const progressById = useMemo(
+    () =>
+      buildScheduledProgress(scheduledWorkouts, workoutDetails, logs, logSplits),
+    [scheduledWorkouts, workoutDetails, logs, logSplits],
+  )
+
   // Coach demo media for the open workout — fetched lazily (one query per
   // workout), never in the global loader. Errors / missing table → no media.
   const mediaBundle =
@@ -637,6 +655,7 @@ export default function App() {
 
   function changeTab(tab) {
     setView(tab)
+    setWorkoutReturnView('calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -832,6 +851,7 @@ export default function App() {
         logs={logs}
         logSplits={logSplits}
         onBack={backToCalendar}
+        backLabel={workoutReturnView === 'history' ? 'History' : 'Calendar'}
         onLogExercise={openLog}
         onSavePain={handleSavePain}
         savingPainId={savingPainId}
@@ -875,11 +895,24 @@ export default function App() {
             signOutError={signOutError}
             onOpenProposals={() => setView('proposals')}
           />
-        ) : (
-          <CalendarView
-            scheduledWorkouts={calendarScheduled}
+        ) : view === 'history' ? (
+          <HistoryView
+            scheduledWorkouts={scheduledWorkouts}
+            progressById={progressById}
             getWorkout={getWorkout}
             onSelectScheduled={openWorkout}
+            onBack={() => setView('calendar')}
+          />
+        ) : (
+          <CalendarView
+            scheduledWorkouts={scheduledWorkouts}
+            upcomingWorkouts={calendarScheduled}
+            progressById={progressById}
+            getWorkout={getWorkout}
+            onSelectScheduled={openWorkout}
+            onOpenHistory={() => setView('history')}
+            month={calendarMonth}
+            onMonthChange={setCalendarMonth}
             canGenerateNextWeek={nextWeekEligibility.ready}
             onGenerateNextWeek={handleGenerateNextWeek}
             generatingNextWeek={generatingNextWeek}

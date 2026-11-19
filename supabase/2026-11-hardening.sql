@@ -15,6 +15,8 @@
 --   7. leaderboard groups + scoped family_leaderboard (streak no longer
 --      resets every Monday while the current week is still in progress)
 --   8. logs.weight_unit (lb/kg per logged set; NULL = legacy lb)
+--   9. Coach exercise demo media (exercise_media table + private
+--      'exercise-media' storage bucket and its storage.objects policies)
 --
 -- All new policies use (select auth.uid()) so the value is computed once per
 -- statement instead of once per row.
@@ -842,5 +844,284 @@ alter table public.logs drop constraint if exists logs_weight_unit_check;
 alter table public.logs
   add constraint logs_weight_unit_check
   check (weight_unit is null or weight_unit in ('lb', 'kg'));
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- 9. Coach exercise demo media
+-- ═════════════════════════════════════════════════════════════════════════
+-- Coaches attach photos / videos / links that show athletes how to do an
+-- exercise (TrueCoach-style). Two scopes:
+--   * exercise_id set         → the coach's default demo for that exercise,
+--                               shown wherever any of their ACTIVE athletes
+--                               has the exercise in a workout.
+--   * workout_exercise_id set → specific to one prescribed exercise in one
+--                               athlete's workout.
+-- Files live in the private 'exercise-media' bucket at
+-- '<coach uid>/<uuid>.<ext>'; the app reads them via short-lived signed URLs.
+-- Storage objects are NOT deleted by the cascades below (Supabase blocks SQL
+-- deletes on storage.objects) — the app removes the file when a coach deletes
+-- a media row; files orphaned by a cascade can be cleaned up from the
+-- dashboard (Storage → exercise-media).
+
+-- 9a. Bucket. 50 MB per file is the Supabase FREE plan's global per-file cap
+-- (a bucket limit cannot exceed it); free plan storage is 1 GB in total, so
+-- long videos should be YouTube/Vimeo/Drive links instead. Re-running resets
+-- the bucket to private with these limits.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'exercise-media',
+  'exercise-media',
+  false,
+  52428800, -- 50 MB
+  array[
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic',
+    'video/mp4', 'video/quicktime', 'video/webm'
+  ]
+)
+on conflict (id) do update
+  set public = false,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+-- 9b. Table.
+create table if not exists public.exercise_media (
+  id uuid primary key default gen_random_uuid(),
+  coach_id uuid not null references public.users(id) on delete cascade,
+  exercise_id uuid references public.exercises(id) on delete cascade,
+  workout_exercise_id uuid references public.workout_exercises(id) on delete cascade,
+  kind text not null check (kind in ('image', 'video', 'link')),
+  storage_path text,
+  external_url text,
+  caption text,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+alter table public.exercise_media drop constraint if exists exercise_media_one_target;
+alter table public.exercise_media
+  add constraint exercise_media_one_target
+  check ((exercise_id is null) <> (workout_exercise_id is null));
+
+alter table public.exercise_media drop constraint if exists exercise_media_kind_source;
+alter table public.exercise_media
+  add constraint exercise_media_kind_source
+  check (
+    (kind in ('image', 'video') and storage_path is not null and external_url is null)
+    or (kind = 'link' and external_url is not null and storage_path is null)
+  );
+
+-- Files must sit in the owning coach's folder: '<coach uid>/<file>'.
+alter table public.exercise_media drop constraint if exists exercise_media_storage_path_check;
+alter table public.exercise_media
+  add constraint exercise_media_storage_path_check
+  check (
+    storage_path is null
+    or (split_part(storage_path, '/', 1) = coach_id::text
+        and storage_path ~ '^[0-9a-f-]{36}/[A-Za-z0-9._-]{1,200}$')
+  );
+
+alter table public.exercise_media drop constraint if exists exercise_media_external_url_check;
+alter table public.exercise_media
+  add constraint exercise_media_external_url_check
+  check (
+    external_url is null
+    or (external_url ~* '^https://[^[:space:]]+$' and char_length(external_url) <= 2000)
+  );
+
+alter table public.exercise_media drop constraint if exists exercise_media_caption_check;
+alter table public.exercise_media
+  add constraint exercise_media_caption_check
+  check (caption is null or char_length(caption) <= 280);
+
+create index if not exists idx_exercise_media_exercise_coach
+  on public.exercise_media(exercise_id, coach_id);
+create index if not exists idx_exercise_media_workout_exercise
+  on public.exercise_media(workout_exercise_id);
+create index if not exists idx_exercise_media_coach
+  on public.exercise_media(coach_id);
+
+alter table public.exercise_media enable row level security;
+revoke all on public.exercise_media from anon;
+
+-- 9c. SECURITY DEFINER helpers (no nested RLS on users / workouts /
+-- coach_athletes from inside the policies).
+
+-- Caller has users.is_coach.
+create or replace function public.is_coach_user()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $is_coach_user$
+  select exists (
+    select 1 from public.users u
+    where u.id = auth.uid() and u.is_coach
+  );
+$is_coach_user$;
+
+-- Athlete (workouts.user_id) who owns a workout_exercises row.
+create or replace function public.workout_exercise_owner(p_workout_exercise_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $workout_exercise_owner$
+  select w.user_id
+  from public.workout_exercises we
+  join public.workouts w on w.id = we.workout_id
+  where we.id = p_workout_exercise_id;
+$workout_exercise_owner$;
+
+-- Caller is an ACTIVE athlete of p_coach_id.
+create or replace function public.has_active_coach(p_coach_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $has_active_coach$
+  select exists (
+    select 1 from public.coach_athletes ca
+    where ca.coach_id = p_coach_id
+      and ca.athlete_id = auth.uid()
+      and ca.status = 'active'
+  );
+$has_active_coach$;
+
+-- Same, keyed by a storage folder name (text, so a malformed folder never
+-- raises a uuid cast error inside a storage policy).
+create or replace function public.has_active_coach_folder(p_folder text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $has_active_coach_folder$
+  select exists (
+    select 1 from public.coach_athletes ca
+    where ca.coach_id::text = p_folder
+      and ca.athlete_id = auth.uid()
+      and ca.status = 'active'
+  );
+$has_active_coach_folder$;
+
+revoke all on function public.is_coach_user() from public, anon;
+revoke all on function public.workout_exercise_owner(uuid) from public, anon;
+revoke all on function public.has_active_coach(uuid) from public, anon;
+revoke all on function public.has_active_coach_folder(text) from public, anon;
+grant execute on function public.is_coach_user() to authenticated;
+grant execute on function public.workout_exercise_owner(uuid) to authenticated;
+grant execute on function public.has_active_coach(uuid) to authenticated;
+grant execute on function public.has_active_coach_folder(text) to authenticated;
+
+-- 9d. exercise_media policies.
+drop policy if exists exercise_media_select_coach on public.exercise_media;
+drop policy if exists exercise_media_select_athlete on public.exercise_media;
+drop policy if exists exercise_media_insert_coach on public.exercise_media;
+drop policy if exists exercise_media_update_coach on public.exercise_media;
+drop policy if exists exercise_media_delete_coach on public.exercise_media;
+
+create policy exercise_media_select_coach on public.exercise_media
+  for select to authenticated
+  using (coach_id = (select auth.uid()) and (select public.is_coach_user()));
+
+-- Athlete: only media from a coach they are ACTIVELY linked to, and only
+-- exercise-level defaults or items attached to their own workouts.
+create policy exercise_media_select_athlete on public.exercise_media
+  for select to authenticated
+  using (
+    public.has_active_coach(coach_id)
+    and (
+      exercise_id is not null
+      or public.workout_exercise_owner(workout_exercise_id) = (select auth.uid())
+    )
+  );
+
+-- Writes: coach only, own rows only; workout-specific media only on a
+-- workout of a currently ACTIVE athlete; exercise-level media only for an
+-- exercise the coach can see.
+create policy exercise_media_insert_coach on public.exercise_media
+  for insert to authenticated
+  with check (
+    coach_id = (select auth.uid())
+    and (select public.is_coach_user())
+    and (
+      workout_exercise_id is null
+      or public.is_active_coach_of(public.workout_exercise_owner(workout_exercise_id))
+    )
+    and (
+      exercise_id is null
+      or exists (select 1 from public.exercises e where e.id = exercise_media.exercise_id)
+    )
+  );
+
+create policy exercise_media_update_coach on public.exercise_media
+  for update to authenticated
+  using (coach_id = (select auth.uid()) and (select public.is_coach_user()))
+  with check (
+    coach_id = (select auth.uid())
+    and (select public.is_coach_user())
+    and (
+      workout_exercise_id is null
+      or public.is_active_coach_of(public.workout_exercise_owner(workout_exercise_id))
+    )
+    and (
+      exercise_id is null
+      or exists (select 1 from public.exercises e where e.id = exercise_media.exercise_id)
+    )
+  );
+
+create policy exercise_media_delete_coach on public.exercise_media
+  for delete to authenticated
+  using (coach_id = (select auth.uid()) and (select public.is_coach_user()));
+
+-- 9e. storage.objects policies for the 'exercise-media' bucket.
+-- Path convention '<coach uid>/<uuid>.<ext>'. Only coaches write, only into
+-- their own folder. Readers: the folder owner, or an athlete whose ACTIVE
+-- coach owns the folder (signed URLs require SELECT on the object).
+drop policy if exists exercise_media_objects_select on storage.objects;
+drop policy if exists exercise_media_objects_insert on storage.objects;
+drop policy if exists exercise_media_objects_update on storage.objects;
+drop policy if exists exercise_media_objects_delete on storage.objects;
+
+create policy exercise_media_objects_select on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'exercise-media'
+    and (
+      (storage.foldername(name))[1] = (select auth.uid())::text
+      or public.has_active_coach_folder((storage.foldername(name))[1])
+    )
+  );
+
+create policy exercise_media_objects_insert on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'exercise-media'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+    and (select public.is_coach_user())
+  );
+
+create policy exercise_media_objects_update on storage.objects
+  for update to authenticated
+  using (
+    bucket_id = 'exercise-media'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+    and (select public.is_coach_user())
+  )
+  with check (
+    bucket_id = 'exercise-media'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+    and (select public.is_coach_user())
+  );
+
+create policy exercise_media_objects_delete on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'exercise-media'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+    and (select public.is_coach_user())
+  );
 
 notify pgrst, 'reload schema';

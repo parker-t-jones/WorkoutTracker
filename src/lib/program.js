@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { normalizeExerciseName, scheduleDateFor, nextMonday } from './user'
-import { getDistanceUnit } from './units'
+import { getDistanceUnit, getWeightUnit } from './units'
 import {
   ensureCardioWarmup,
   normalizeCardioExercise,
@@ -492,6 +492,7 @@ export async function generateAndSaveProgram(formAnswers, userId) {
     bodyweight_unit: formAnswers.bodyweight_unit || 'lb',
     session_length: formAnswers.session_length || '',
     distance_unit: getDistanceUnit(),
+    weight_unit: getWeightUnit(),
     exercise_catalog: catalog.map((e) => ({
       name: e.name,
       modality: e.modality ?? 'strength',
@@ -665,6 +666,7 @@ export async function generateAndSaveNextWeek({
     bodyweight_unit: profile.bodyweight_unit || 'lb',
     session_length: profile.session_length || '',
     distance_unit: getDistanceUnit(),
+    weight_unit: getWeightUnit(),
     exercise_catalog: catalog.map((e) => ({
       name: e.name,
       modality: e.modality ?? 'strength',

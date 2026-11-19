@@ -107,7 +107,9 @@ function parseIntervalPattern(text, unit) {
   const s = String(text)
   // e.g. 6x800m, 6 × 0.5 mi, 5 x 3 min
   const m = s.match(
-    /(\d+)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(m|mi|miles?|km|kilometers?|min|mins|minutes?)?/i,
+    // Longest alternatives first + \b so "0.5 mi" isn't read as meters and
+    // "3 min" isn't read as meters either.
+    /(\d+)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|seconds?|secs?|s|miles?|mi|kilometers?|km|meters?|m)?\b/i,
   )
   if (!m) return null
   const count = Number(m[1])
@@ -116,14 +118,16 @@ function parseIntervalPattern(text, unit) {
   const splits = []
   for (let i = 0; i < count; i++) {
     const work = { split_number: splits.length + 1, label: 'work' }
-    if (u === 'm') {
+    if (u === 'm' || u.startsWith('meter')) {
       work.distance = metersToUnit(mag, unit)
       work.unit = unit
-    } else if (u.startsWith('km')) {
+    } else if (u === 'km' || u.startsWith('kilometer')) {
       work.distance = unit === 'mi' ? Math.round((mag / 1.60934) * 100) / 100 : mag
       work.unit = unit
     } else if (u.startsWith('min')) {
       work.duration_seconds = Math.round(mag * 60)
+    } else if (u === 's' || u.startsWith('sec')) {
+      work.duration_seconds = Math.round(mag)
     } else {
       // mi or bare number treated as distance in preferred unit
       work.distance = mag

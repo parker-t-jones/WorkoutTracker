@@ -1,4 +1,4 @@
-import { Calendar, TrendingUp, Trophy, User } from 'lucide-react'
+import { Calendar, ClipboardList, TrendingUp, Trophy, User } from 'lucide-react'
 
 const tabs = [
   { id: 'calendar', label: 'Calendar', Icon: Calendar },
@@ -7,7 +7,13 @@ const tabs = [
   { id: 'account', label: 'Account', Icon: User },
 ]
 
-export default function TabBar({ active, onChange }) {
+// Only shown to users with users.is_coach.
+const coachTab = { id: 'coach', label: 'Coach', Icon: ClipboardList }
+
+export default function TabBar({ active, onChange, showCoach = false }) {
+  const visible = showCoach
+    ? [...tabs.slice(0, 3), coachTab, tabs[3]]
+    : tabs
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-40 border-t border-orange-dim/25 bg-surface shadow-[0_-4px_16px_rgb(0_0_0/0.18)]"
@@ -15,7 +21,7 @@ export default function TabBar({ active, onChange }) {
       aria-label="Main"
     >
       <div className="mx-auto flex max-w-lg">
-        {tabs.map(({ id, label, Icon }) => {
+        {visible.map(({ id, label, Icon }) => {
           const selected = active === id
           return (
             <button

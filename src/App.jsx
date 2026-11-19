@@ -11,6 +11,9 @@ import AuthScreen from './components/AuthScreen'
 import AccountView from './components/AccountView'
 import WeekAdaptationSummary from './components/WeekAdaptationSummary'
 import ProposedSubstitutionsView from './components/ProposedSubstitutionsView'
+import CoachHome from './components/coach/CoachHome'
+import { DemoChip, HowToDoIt } from './components/ExerciseDemo'
+import { useExerciseMedia } from './lib/useExerciseMedia'
 import { supabase } from './lib/supabase'
 import {
   loadProgramData,
@@ -53,10 +56,13 @@ export default function App() {
   const [workoutsById, setWorkoutsById] = useState({})
   const [workoutDetails, setWorkoutDetails] = useState({})
   const [userId, setUserId] = useState(null)
+  // users.is_coach from ensureProfile — gates the Coach tab (RLS/RPCs enforce
+  // the real permission server-side).
+  const [isCoach, setIsCoach] = useState(false)
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
 
-  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | workout | log | week-summary | proposals
+  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | coach | workout | log | week-summary | proposals
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
   const [editLogId, setEditLogId] = useState(null)
@@ -103,9 +109,14 @@ export default function App() {
 
       try {
         setLoadError(null)
-        await ensureProfile(user)
+        const profile = await ensureProfile(user)
+        const coach = Boolean(profile?.is_coach)
+        setIsCoach(coach)
         const data = await loadProgramData(user.id)
         applyProgramData(data)
+        // A coach who doesn't train with the app lands on the Coach tab
+        // instead of being forced through onboarding.
+        if (coach && data.scheduledWorkouts.length === 0) setView('coach')
         return data
       } catch (err) {
         console.error(err)
@@ -167,6 +178,7 @@ export default function App() {
       } else {
         loadedUserIdRef.current = null
         setUserId(null)
+        setIsCoach(false)
         setLoadError(null)
         setAdaptationSummary(null)
         setSignOutError(null)
@@ -613,6 +625,25 @@ export default function App() {
     [scheduledWorkouts, workoutDetails],
   )
 
+  // Coach demo media for the open workout — fetched lazily (one query per
+  // workout), never in the global loader. Errors / missing table → no media.
+  const mediaBundle =
+    (view === 'workout' || view === 'log') && scheduledId != null
+      ? getScheduledBundle(scheduledId)
+      : null
+  const { media: exerciseMedia } = useExerciseMedia(mediaBundle?.exercises, {
+    enabled: Boolean(mediaBundle),
+  })
+
+  function changeTab(tab) {
+    setView(tab)
+    setScheduledId(null)
+    setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
+    setJustCompleted(false)
+  }
+
   // Before the loading screen: a background reload must not unmount the
   // recovery form (or its "Password updated" confirmation).
   if (passwordRecovery) {
@@ -688,8 +719,12 @@ export default function App() {
     )
   }
 
-  if (needsOnboarding) {
-    return (
+  const coachWithoutProgram =
+    isCoach &&
+    ['coach', 'account', 'progress', 'leaderboard', 'proposals'].includes(view)
+
+  if (needsOnboarding && !coachWithoutProgram) {
+    const form = (
       <OnboardingForm
         onSubmit={handleOnboardingSubmit}
         error={onboardingError}
@@ -697,6 +732,13 @@ export default function App() {
         onSignOut={handleSignOut}
         signOutError={signOutError}
       />
+    )
+    if (!isCoach) return form
+    return (
+      <>
+        <div className="pb-tab-bar">{form}</div>
+        <TabBar active="calendar" onChange={changeTab} showCoach />
+      </>
     )
   }
 
@@ -777,6 +819,7 @@ export default function App() {
           error={logError}
           initialEditLogId={editLogId}
           initialShowRpe={logShowRpe}
+          headerExtras={<HowToDoIt items={exerciseMedia[we.id]} />}
         />
       )
     }
@@ -796,6 +839,7 @@ export default function App() {
         finishingWorkout={finishingWorkout}
         justCompleted={justCompleted}
         error={logError}
+        renderExerciseExtras={(we) => <DemoChip items={exerciseMedia[we.id]} />}
       />
     )
   }
@@ -807,7 +851,9 @@ export default function App() {
         ? 'leaderboard'
         : view === 'account'
           ? 'account'
-          : 'calendar'
+          : view === 'coach' && isCoach
+            ? 'coach'
+            : 'calendar'
 
   return (
     <>
@@ -820,6 +866,8 @@ export default function App() {
           />
         ) : view === 'leaderboard' ? (
           <LeaderboardView currentUserId={userId ?? session.user.id} />
+        ) : view === 'coach' && isCoach ? (
+          <CoachHome coachId={userId ?? session.user.id} />
         ) : view === 'account' ? (
           <AccountView
             email={session.user.email}
@@ -839,17 +887,7 @@ export default function App() {
           />
         )}
       </div>
-      <TabBar
-        active={topTab}
-        onChange={(tab) => {
-          setView(tab)
-          setScheduledId(null)
-          setWorkoutExerciseId(null)
-          setEditLogId(null)
-          setLogShowRpe(false)
-          setJustCompleted(false)
-        }}
-      />
+      <TabBar active={topTab} onChange={changeTab} showCoach={isCoach} />
     </>
   )
 }

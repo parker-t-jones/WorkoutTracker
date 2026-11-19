@@ -11,6 +11,7 @@ import {
   getWeightUnit,
   setWeightUnit,
 } from '../lib/units'
+import AthleteCoachCard from './coach/AthleteCoachCard'
 
 export default function AccountView({
   email,
@@ -83,6 +84,8 @@ export default function AccountView({
         </div>
         <div className="mt-1 text-sm font-medium">{email || '—'}</div>
       </div>
+
+      <AthleteCoachCard />
 
       <div className="mt-4 rounded border border-orange-dim/40 bg-surface px-4 py-4">
         <div className="text-xs uppercase tracking-wide text-muted">

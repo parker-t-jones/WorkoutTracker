@@ -30,7 +30,7 @@ All SQL is applied by hand in the Supabase **SQL editor**. Run in this order
 | 9 | `supabase/auth.sql` | Auth FK + RLS on all tables (see **Auth** below — run after signing up) |
 | 10 | `supabase/leaderboard.sql` | `family_leaderboard` RPC |
 | 11 | `supabase/coach_mode.sql` | Coach/athlete links, coach RLS, custom exercises, templates |
-| 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups, `ensure_shared_exercise`) |
+| 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups + streak fix, `ensure_shared_exercise`, `logs.weight_unit`) |
 
 **Always run `2026-11-hardening.sql` last.** If you ever re-run an older file
 (especially `auth.sql`, `coach_mode.sql`, `exercises-substitutions.sql`,

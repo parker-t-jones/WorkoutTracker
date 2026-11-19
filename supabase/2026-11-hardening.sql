@@ -12,7 +12,9 @@
 --   4. ensure_shared_exercise RPC (program generation after coach_mode.sql)
 --   5. drop auth.sql's open exercises policies
 --   6. admin-only writes for the shared substitution catalog
---   7. leaderboard groups + scoped family_leaderboard
+--   7. leaderboard groups + scoped family_leaderboard (streak no longer
+--      resets every Monday while the current week is still in progress)
+--   8. logs.weight_unit (lb/kg per logged set; NULL = legacy lb)
 --
 -- All new policies use (select auth.uid()) so the value is computed once per
 -- statement instead of once per row.
@@ -710,8 +712,9 @@ begin
 end
 $seed_family_group$;
 
--- family_leaderboard: identical scoring to leaderboard.sql; the only change is
--- the user filter (caller + anyone sharing at least one group with the caller).
+-- family_leaderboard: identical scoring to leaderboard.sql. Changes: the user
+-- filter (caller + anyone sharing at least one group with the caller), and
+-- the streak skips the current week while it has no credit yet (see below).
 create or replace function public.family_leaderboard(as_of date default current_date)
 returns table (
   user_id uuid,
@@ -792,9 +795,16 @@ begin
     end;
 
     -- Consecutive weeks with score > 0, walking back from the current week.
-    -- NULL (no schedule) or 0% breaks the streak.
+    -- NULL (no schedule) or 0% breaks the streak. The current week is still
+    -- in progress, so if it has no credit yet it neither counts nor breaks
+    -- the streak — counting starts at last week instead (otherwise every
+    -- streak dropped to 0 each Monday).
     s := 0;
     w_start := v_week_start;
+    score := public.week_score_for(r.id, v_week_start, v_week_end);
+    if score is null or score <= 0 then
+      w_start := v_week_start - 7;
+    end if;
     loop
       score := public.week_score_for(r.id, w_start, w_start + 6);
       exit when score is null or score <= 0;
@@ -817,5 +827,20 @@ $$;
 revoke all on function public.family_leaderboard(date) from public;
 revoke all on function public.family_leaderboard(date) from anon;
 grant execute on function public.family_leaderboard(date) to authenticated;
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- 8. logs.weight_unit
+-- ═════════════════════════════════════════════════════════════════════════
+-- Unit the set's actual_weight was entered in. NULL = legacy rows, which were
+-- all pounds. The app converts to the user's display unit when reading.
+-- Existing logs_* RLS policies already cover this column.
+
+alter table public.logs
+  add column if not exists weight_unit text;
+
+alter table public.logs drop constraint if exists logs_weight_unit_check;
+alter table public.logs
+  add constraint logs_weight_unit_check
+  check (weight_unit is null or weight_unit in ('lb', 'kg'));
 
 notify pgrst, 'reload schema';

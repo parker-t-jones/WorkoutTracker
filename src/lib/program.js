@@ -18,7 +18,6 @@ import {
   canGenerateNextWeek,
   buildPriorWeekAdaptation,
   mondayAfterLastScheduled,
-  startOfWeekMonday,
   filterScheduledForCalendar,
   filterScheduledToHorizon,
   resolvePainSubstitutions,
@@ -582,18 +581,18 @@ async function fetchSubstitutionsByPrimaryIds(exerciseIds) {
  * Monday the adaptive next week starts on.
  *
  * Normally the Monday after the prior week's last scheduled date. If the
- * athlete generates late (that Monday is before this calendar week's Monday),
- * the week would be scheduled in the past, hidden by
- * filterScheduledForCalendar, and canGenerateNextWeek would immediately say
- * "ready" again. In that case start this week only if today IS Monday,
- * otherwise next Monday — a few days are skipped, but no workout is ever
- * scheduled on a date that has already gone by.
+ * athlete generates late (that Monday has already gone by), the week's first
+ * days would be scheduled in the past — and if every day is past,
+ * canGenerateNextWeek immediately says "ready" again. In that case start
+ * today if today IS Monday, otherwise next Monday — a few days are skipped,
+ * but no workout is ever scheduled on a date that has already gone by.
  */
 export function nextWeekStartMonday(scheduledForPriorWeek, today = new Date()) {
   const afterLast = mondayAfterLastScheduled(scheduledForPriorWeek)
-  const thisMonday = startOfWeekMonday(today)
-  if (afterLast < thisMonday) {
-    // nextMonday() returns today when today is Monday (= thisMonday).
+  const todayStart = new Date(today)
+  todayStart.setHours(0, 0, 0, 0)
+  if (afterLast < todayStart) {
+    // nextMonday() returns today when today is Monday.
     return nextMonday(today)
   }
   return afterLast

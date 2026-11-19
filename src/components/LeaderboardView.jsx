@@ -9,6 +9,11 @@ import {
   rankLeaderboard,
 } from '../lib/leaderboard'
 
+function isMissingFunctionError(err) {
+  const text = `${err?.code ?? ''} ${err?.message ?? ''}`
+  return /PGRST202|42883|could not find the function|function .* does not exist/i.test(text)
+}
+
 function GroupsSection({ groups, loading, error, onChanged }) {
   const [code, setCode] = useState('')
   const [newName, setNewName] = useState('')
@@ -189,15 +194,22 @@ export default function LeaderboardView({ currentUserId }) {
   const [groups, setGroups] = useState([])
   const [groupsLoading, setGroupsLoading] = useState(true)
   const [groupsError, setGroupsError] = useState(null)
+  const [groupsUnavailable, setGroupsUnavailable] = useState(false)
 
   const loadGroups = useCallback(async () => {
     setGroupsLoading(true)
     setGroupsError(null)
     try {
       setGroups(await fetchMyLeaderboardGroups())
+      setGroupsUnavailable(false)
     } catch (err) {
       console.error(err)
-      setGroupsError(err?.message || 'Could not load groups')
+      // Group RPCs missing = 2026-11-hardening.sql not run yet.
+      if (isMissingFunctionError(err)) {
+        setGroupsUnavailable(true)
+      } else {
+        setGroupsError(err?.message || 'Could not load groups')
+      }
       setGroups([])
     } finally {
       setGroupsLoading(false)
@@ -319,12 +331,18 @@ export default function LeaderboardView({ currentUserId }) {
         </ol>
       )}
 
-      <GroupsSection
-        groups={groups}
-        loading={groupsLoading}
-        error={groupsError}
-        onChanged={handleGroupsChanged}
-      />
+      {groupsUnavailable ? (
+        <p className="mt-6 text-xs text-muted">
+          Leaderboard groups aren’t set up yet.
+        </p>
+      ) : (
+        <GroupsSection
+          groups={groups}
+          loading={groupsLoading}
+          error={groupsError}
+          onChanged={handleGroupsChanged}
+        />
+      )}
 
       <p className="mt-6 text-xs text-muted">
         Score = workout completion × 60% + exercise completion × 40%. Ties break

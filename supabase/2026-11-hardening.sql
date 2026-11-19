@@ -384,8 +384,10 @@ begin
     raise exception 'Exercise name must be 2–80 characters' using errcode = '22023';
   end if;
 
-  if v_name !~ '^[A-Za-z0-9][A-Za-z0-9 ()''&/.,+:#%-]*$' then
-    raise exception 'Exercise name contains unsupported characters' using errcode = '22023';
+  -- Any printable text (unicode letters, °, ×, accents, punctuation) is
+  -- fine; only control characters are rejected.
+  if v_name ~ '[[:cntrl:]]' then
+    raise exception 'Exercise name contains control characters' using errcode = '22023';
   end if;
 
   if v_pattern !~ '^[a-z][a-z_]{0,39}$' then
@@ -938,6 +940,8 @@ create index if not exists idx_exercise_media_workout_exercise
   on public.exercise_media(workout_exercise_id);
 create index if not exists idx_exercise_media_coach
   on public.exercise_media(coach_id);
+create index if not exists idx_exercise_media_storage_path
+  on public.exercise_media(storage_path);
 
 alter table public.exercise_media enable row level security;
 revoke all on public.exercise_media from anon;
@@ -1078,20 +1082,28 @@ create policy exercise_media_delete_coach on public.exercise_media
 
 -- 9e. storage.objects policies for the 'exercise-media' bucket.
 -- Path convention '<coach uid>/<uuid>.<ext>'. Only coaches write, only into
--- their own folder. Readers: the folder owner, or an athlete whose ACTIVE
--- coach owns the folder (signed URLs require SELECT on the object).
+-- their own folder. Readers: the folder owner, or anyone who can see an
+-- exercise_media row for the object (signed URLs require SELECT on it).
 drop policy if exists exercise_media_objects_select on storage.objects;
 drop policy if exists exercise_media_objects_insert on storage.objects;
 drop policy if exists exercise_media_objects_update on storage.objects;
 drop policy if exists exercise_media_objects_delete on storage.objects;
 
+-- Non-owners may read an object only when an exercise_media row pointing at
+-- it is visible to them. The EXISTS runs under the caller's own
+-- exercise_media RLS, so an athlete sees their active coach's
+-- exercise-level files and files attached to their OWN workouts — not
+-- files the same coach attached to another athlete's workout.
 create policy exercise_media_objects_select on storage.objects
   for select to authenticated
   using (
     bucket_id = 'exercise-media'
     and (
       (storage.foldername(name))[1] = (select auth.uid())::text
-      or public.has_active_coach_folder((storage.foldername(name))[1])
+      or exists (
+        select 1 from public.exercise_media em
+        where em.storage_path = objects.name
+      )
     )
   );
 

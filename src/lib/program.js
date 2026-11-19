@@ -312,6 +312,11 @@ async function resolveExerciseId(
   return id
 }
 
+/** Errors from resolveExerciseId that should skip one exercise, not the run. */
+function isSkippableExerciseError(err) {
+  return ['22023', '23505', 'PGRST202', '42883'].includes(err?.code)
+}
+
 async function invokeGenerateProgram(body) {
   const client = assertSupabase()
   const { data, error } = await client.functions.invoke('generate-program', {
@@ -373,18 +378,31 @@ async function insertProgramWeeks({
       ensureCardioWarmup(day, distanceUnit)
 
       const exercises = []
+      let firstSkipError = null
       for (const raw of day.exercises) {
         const catalogEx = catalogByNorm.get(normalizeExerciseName(raw.name))
         const ex = normalizeCardioExercise(raw, catalogEx, distanceUnit)
         const modality = ex.modality === 'cardio' ? 'cardio' : 'strength'
-        const exerciseId = await resolveExerciseId(
-          ex.name,
-          catalog,
-          catalogByNorm,
-          { modality },
-        )
+        let exerciseId
+        try {
+          exerciseId = await resolveExerciseId(
+            ex.name,
+            catalog,
+            catalogByNorm,
+            { modality },
+          )
+        } catch (err) {
+          // An unusable AI-chosen name (rejected by ensure_shared_exercise,
+          // taken by a private exercise, or the RPC not migrated yet) drops
+          // just that exercise. Network/auth errors still fail the run.
+          if (!isSkippableExerciseError(err)) throw err
+          console.warn(`Skipping exercise "${ex.name}":`, err)
+          firstSkipError ??= err
+          continue
+        }
         exercises.push({ ex, exerciseId, modality })
       }
+      if (exercises.length === 0 && firstSkipError) throw firstSkipError
 
       const scheduleWeekNumber = relativeToStartMonday ? 1 : week.week_number
       const date = scheduleDates?.length

@@ -7,7 +7,13 @@ import {
   isCardioExercise,
   isExerciseFullyLogged,
 } from '../lib/logging'
-import { formatDistance, formatDuration } from '../lib/units'
+import {
+  formatDistance,
+  formatDuration,
+  getWeightUnit,
+  roundWeight,
+} from '../lib/units'
+import { logWeightIn } from '../lib/progress'
 
 function prescribeLabel(we) {
   if (isCardioExercise(we)) {
@@ -51,12 +57,18 @@ export default function WorkoutDetail({
   onLogExercise,
   onSavePain,
   savingPainId,
+  onFinishWorkout,
+  finishingWorkout = false,
   justCompleted,
   error,
+  // Optional (we) => node rendered under each exercise's header, e.g. coach
+  // demo media. Kept generic so coach mode can plug in without restructuring.
+  renderExerciseExtras = null,
 }) {
   const { workout, exercises, date, status } = scheduled
   const [painOpenId, setPainOpenId] = useState(null)
   const [painDraft, setPainDraft] = useState('')
+  const [weightUnit] = useState(() => getWeightUnit())
 
   let doneUnits = 0
   let totalUnits = 0
@@ -68,6 +80,17 @@ export default function WorkoutDetail({
   const allDone =
     status === 'completed' ||
     exercises.every((we) => isExerciseFullyLogged(we, logs, logSplits))
+  const exerciseIds = new Set(exercises.map((we) => we.id))
+  const anyLogged = logs.some((l) => exerciseIds.has(l.workout_exercise_id))
+  const canFinish = Boolean(onFinishWorkout) && status !== 'completed' && anyLogged
+
+  function handleFinish() {
+    if (!onFinishWorkout || finishingWorkout) return
+    const ok = window.confirm(
+      'Finish this workout now? Unlogged sets will count as skipped.',
+    )
+    if (ok) onFinishWorkout()
+  }
 
   function openPain(weId) {
     setPainOpenId(weId)
@@ -159,7 +182,8 @@ export default function WorkoutDetail({
                   {we.notes ? (
                     <div className="mt-1 text-sm text-muted">{we.notes}</div>
                   ) : null}
-                  {done > 0 && (
+                  {renderExerciseExtras ? renderExerciseExtras(we) : null}
+                  {logged.length > 0 && (
                     <div className="mt-2 space-y-1.5">
                       <div className="text-xs text-success/85">
                         Logged {done}/{total}
@@ -183,7 +207,7 @@ export default function WorkoutDetail({
                             >
                               #{l.set_number}: {l.actual_reps}
                               {l.actual_weight != null
-                                ? `x${l.actual_weight}`
+                                ? `x${roundWeight(logWeightIn(l, weightUnit))}`
                                 : ''}
                             </button>
                           ))}
@@ -248,7 +272,7 @@ export default function WorkoutDetail({
                   >
                     {exerciseDone ? 'Edit' : done > 0 ? 'Continue' : 'Log'}
                   </button>
-                  {exerciseDone ? (
+                  {logged.length > 0 ? (
                     <button
                       type="button"
                       onClick={() =>
@@ -326,6 +350,17 @@ export default function WorkoutDetail({
           )
         })}
       </ul>
+
+      {canFinish ? (
+        <button
+          type="button"
+          onClick={handleFinish}
+          disabled={finishingWorkout}
+          className="mt-6 w-full rounded border border-orange-dim/50 bg-surface py-4 text-base font-medium text-ink hover:bg-surface-alt disabled:opacity-60"
+        >
+          {finishingWorkout ? 'Finishing…' : 'Finish workout'}
+        </button>
+      ) : null}
     </div>
   )
 }

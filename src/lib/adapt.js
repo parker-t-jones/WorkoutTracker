@@ -1,3 +1,5 @@
+import { countLoggedWorkSplits, workSplitNumbers } from './intervals'
+
 /**
  * @typedef {'substitute' | 'skip' | 'progress' | 'hold' | 'reduce_volume'} AdaptDecision
  */
@@ -400,13 +402,22 @@ function paceWithinTarget(actualPace, targetPace) {
 
 function analyzeIntervalSplits(we, weLogs, logSplits) {
   const targets = Array.isArray(we.target_splits) ? we.target_splits : []
-  if (!we.is_interval || targets.length === 0) {
+  if (!we.is_interval) {
     return { intervalHitRate: null, lateSplitFade: false, splitsLogged: 0 }
   }
   const parentIds = new Set(weLogs.map((l) => l.id))
   const splits = (logSplits ?? [])
     .filter((s) => parentIds.has(s.log_id))
     .sort((a, b) => a.split_number - b.split_number)
+  if (targets.length === 0) {
+    // No per-split targets: split 1..sets are all work bouts.
+    return {
+      intervalHitRate: null,
+      lateSplitFade: false,
+      splitsLogged: countLoggedWorkSplits(we, splits),
+      splitsPrescribed: workSplitNumbers(we).size,
+    }
+  }
 
   let hits = 0
   let compared = 0
@@ -442,11 +453,13 @@ function analyzeIntervalSplits(we, weLogs, logSplits) {
     earlyRate >= 0.7 &&
     lateRate <= earlyRate - 0.35
 
+  // Completion counts work bouts only; recovery rows are optional to log.
+  // split_number still indexes the full targets array (see intervals.js).
   return {
     intervalHitRate,
     lateSplitFade,
-    splitsLogged: splits.length,
-    splitsPrescribed: targets.length,
+    splitsLogged: countLoggedWorkSplits(we, splits),
+    splitsPrescribed: workSplitNumbers(we).size,
   }
 }
 

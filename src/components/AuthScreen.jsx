@@ -6,7 +6,11 @@ import {
   updatePassword,
 } from '../lib/auth'
 
-export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
+export default function AuthScreen({
+  mode: initialMode = 'login',
+  onAuthed,
+  onCancel,
+}) {
   const [mode, setMode] = useState(initialMode) // login | signup | forgot | recovery
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -14,6 +18,8 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
   const [error, setError] = useState(null)
   const [info, setInfo] = useState(null)
   const [busy, setBusy] = useState(false)
+  // Recovery: show confirmation and wait for "Continue" so it's actually seen.
+  const [passwordUpdated, setPasswordUpdated] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -43,8 +49,7 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
           return
         }
         await updatePassword(password)
-        setInfo('Password updated. You are signed in.')
-        onAuthed?.()
+        setPasswordUpdated(true)
       }
     } catch (err) {
       setError(err.message || 'Something went wrong')
@@ -61,6 +66,28 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
         : mode === 'recovery'
           ? 'Set a new password'
           : 'Sign in'
+
+  if (passwordUpdated) {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-12">
+        <header className="mb-8">
+          <h1 className="font-display text-2xl font-semibold tracking-tight">
+            Password updated
+          </h1>
+        </header>
+        <p className="rounded border border-success-border/55 bg-surface-alt px-3 py-3 text-sm text-success">
+          Your new password is saved and you’re signed in.
+        </p>
+        <button
+          type="button"
+          onClick={() => onAuthed?.()}
+          className="mt-6 w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim"
+        >
+          Continue
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="mx-auto max-w-lg px-4 py-12">
@@ -199,6 +226,16 @@ export default function AuthScreen({ mode: initialMode = 'login', onAuthed }) {
             }}
           >
             Already have an account? Sign in
+          </button>
+        )}
+        {mode === 'recovery' && onCancel && (
+          <button
+            type="button"
+            disabled={busy}
+            className="underline hover:text-ink disabled:opacity-60"
+            onClick={() => onCancel()}
+          >
+            Cancel and sign out
           </button>
         )}
         {mode === 'forgot' && (

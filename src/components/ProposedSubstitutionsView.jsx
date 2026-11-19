@@ -5,6 +5,15 @@ import {
   rejectProposal,
 } from '../lib/proposals'
 
+function actionErrorText(err, action) {
+  if (err?.isPermissionError) {
+    return action === 'approve'
+      ? 'Only an admin can approve proposals.'
+      : 'Only an admin can reject proposals.'
+  }
+  return err?.message || (action === 'approve' ? 'Approve failed' : 'Reject failed')
+}
+
 export default function ProposedSubstitutionsView({ onBack }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -45,7 +54,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
       await refresh()
     } catch (err) {
       console.error(err)
-      setBanner({ type: 'err', text: err.message || 'Approve failed' })
+      setBanner({ type: 'err', text: actionErrorText(err, 'approve') })
     } finally {
       setBusyId(null)
     }
@@ -65,7 +74,7 @@ export default function ProposedSubstitutionsView({ onBack }) {
       await refresh()
     } catch (err) {
       console.error(err)
-      setBanner({ type: 'err', text: err.message || 'Reject failed' })
+      setBanner({ type: 'err', text: actionErrorText(err, 'reject') })
     } finally {
       setBusyId(null)
     }

@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import CalendarView from './components/CalendarView'
 import WorkoutDetail from './components/WorkoutDetail'
+import HistoryView from './components/HistoryView'
 import LogSet from './components/LogSet'
 import LogCardio from './components/LogCardio'
 import OnboardingForm from './components/OnboardingForm'
@@ -11,6 +12,9 @@ import AuthScreen from './components/AuthScreen'
 import AccountView from './components/AccountView'
 import WeekAdaptationSummary from './components/WeekAdaptationSummary'
 import ProposedSubstitutionsView from './components/ProposedSubstitutionsView'
+import CoachHome from './components/coach/CoachHome'
+import { DemoChip, HowToDoIt } from './components/ExerciseDemo'
+import { useExerciseMedia } from './lib/useExerciseMedia'
 import { supabase } from './lib/supabase'
 import {
   loadProgramData,
@@ -23,6 +27,8 @@ import {
 import {
   saveSetLog,
   updateSetLog,
+  deleteSetLog,
+  finishScheduledWorkout,
   saveCardioLog,
   saveIntervalSplit,
   updateExerciseRpe,
@@ -30,6 +36,8 @@ import {
   isCardioExercise,
 } from './lib/logging'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
+import { workoutExerciseIndex } from './lib/progress'
+import { buildScheduledProgress } from './lib/schedule'
 
 export default function App() {
   const [bootstrapping, setBootstrapping] = useState(true)
@@ -50,10 +58,20 @@ export default function App() {
   const [workoutsById, setWorkoutsById] = useState({})
   const [workoutDetails, setWorkoutDetails] = useState({})
   const [userId, setUserId] = useState(null)
+  // users.is_coach from ensureProfile — gates the Coach tab (RLS/RPCs enforce
+  // the real permission server-side).
+  const [isCoach, setIsCoach] = useState(false)
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
 
-  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | workout | log | week-summary | proposals
+  const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | coach | workout | log | week-summary | proposals
+  // Where "back" from a workout goes (it can be opened from the history list).
+  const [workoutReturnView, setWorkoutReturnView] = useState('calendar')
+  // Month shown in the calendar grid — kept here so it survives opening a workout.
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
   const [editLogId, setEditLogId] = useState(null)
@@ -63,6 +81,12 @@ export default function App() {
   const [savingPainId, setSavingPainId] = useState(null)
   const [logError, setLogError] = useState(null)
   const [justCompleted, setJustCompleted] = useState(false)
+  const [finishingWorkout, setFinishingWorkout] = useState(false)
+  const [signOutError, setSignOutError] = useState(null)
+  // User id whose data is loaded/loading. Auth events for the same user
+  // (SIGNED_IN re-emitted on tab refocus, USER_UPDATED) must not remount the
+  // app — that would unmount LogSet mid-entry.
+  const loadedUserIdRef = useRef(null)
 
   const applyProgramData = useCallback((data) => {
     setUserId(data.userId)
@@ -94,9 +118,14 @@ export default function App() {
 
       try {
         setLoadError(null)
-        await ensureProfile(user)
+        const profile = await ensureProfile(user)
+        const coach = Boolean(profile?.is_coach)
+        setIsCoach(coach)
         const data = await loadProgramData(user.id)
         applyProgramData(data)
+        // A coach who doesn't train with the app lands on the Coach tab
+        // instead of being forced through onboarding.
+        if (coach && data.scheduledWorkouts.length === 0) setView('coach')
         return data
       } catch (err) {
         console.error(err)
@@ -130,6 +159,15 @@ export default function App() {
         setPasswordRecovery(true)
         setAuthScreenMode('recovery')
         setBootstrapping(false)
+        // Load data in the background so "Continue" after the new password
+        // lands on a ready app (and USER_UPDATED is then a same-user no-op).
+        const user = nextSession?.user
+        if (user?.id && loadedUserIdRef.current !== user.id) {
+          loadedUserIdRef.current = user.id
+          setTimeout(() => {
+            refreshRef.current(user)
+          }, 0)
+        }
         return
       }
 
@@ -138,13 +176,21 @@ export default function App() {
       if (event === 'TOKEN_REFRESHED') return
 
       if (nextSession?.user) {
+        // Same user (SIGNED_IN on refocus, USER_UPDATED, …): nothing to reload.
+        if (loadedUserIdRef.current === nextSession.user.id) return
+        loadedUserIdRef.current = nextSession.user.id
         if (!submittingRef.current) setBootstrapping(true)
         // Defer DB calls — awaiting inside onAuthStateChange can deadlock the auth lock.
         setTimeout(() => {
           refreshRef.current(nextSession.user)
         }, 0)
       } else {
+        loadedUserIdRef.current = null
         setUserId(null)
+        setIsCoach(false)
+        setLoadError(null)
+        setAdaptationSummary(null)
+        setSignOutError(null)
         setScheduledWorkouts([])
         setWorkoutsById({})
         setWorkoutDetails({})
@@ -198,6 +244,7 @@ export default function App() {
         workouts: Object.values(workoutsById),
         workoutDetails,
         logs,
+        logSplits,
       })
 
       // Always reload calendar data after insert — don't rely on pre-generate state.
@@ -219,12 +266,39 @@ export default function App() {
   }
 
   async function handleSignOut() {
-    await signOut()
+    setSignOutError(null)
+    try {
+      await signOut()
+    } catch (err) {
+      console.error(err)
+      // Server sign-out failed (e.g. offline) — still clear this device.
+      try {
+        await supabase?.auth.signOut({ scope: 'local' })
+      } catch (localErr) {
+        console.error(localErr)
+        setSignOutError(err?.message || 'Could not sign out — try again')
+        return
+      }
+    }
+    setLoadError(null)
+    setAdaptationSummary(null)
   }
 
-  function getWorkout(workoutId) {
-    return workoutsById[workoutId]
+  function handleRetryLoad() {
+    const user = session?.user
+    if (!user?.id) {
+      setLoadError(null)
+      return
+    }
+    loadedUserIdRef.current = user.id
+    setBootstrapping(true)
+    refreshRef.current(user)
   }
+
+  const getWorkout = useCallback(
+    (workoutId) => workoutsById[workoutId],
+    [workoutsById],
+  )
 
   function getScheduledBundle(id) {
     const sw = scheduledWorkouts.find((s) => s.id === id)
@@ -239,6 +313,7 @@ export default function App() {
   }
 
   function openWorkout(id) {
+    setWorkoutReturnView(view === 'history' ? 'history' : 'calendar')
     setScheduledId(id)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -257,7 +332,7 @@ export default function App() {
   }
 
   function backToCalendar() {
-    setView('calendar')
+    setView(workoutReturnView === 'history' ? 'history' : 'calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -280,7 +355,12 @@ export default function App() {
     setLogs((prev) => prev.map((row) => byId[row.id] ?? row))
   }
 
-  async function handleSaveLog({ set_number, actual_reps, actual_weight }) {
+  async function handleSaveLog({
+    set_number,
+    actual_reps,
+    actual_weight,
+    weight_unit,
+  }) {
     const scheduled = getScheduledBundle(scheduledId)
     if (!scheduled || !workoutExerciseId) return
     if (!session?.user?.id) {
@@ -291,18 +371,20 @@ export default function App() {
     setSavingLog(true)
     setLogError(null)
     try {
-      const { log, completed } = await saveSetLog({
+      const { log, completed, warning } = await saveSetLog({
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         setNumber: set_number,
         actualReps: actual_reps,
         actualWeight: actual_weight,
+        weightUnit: weight_unit,
         exercises: scheduled.exercises,
         existingLogs: logs,
         logSplits,
       })
 
-      setLogs((prev) => [...prev, log])
+      setLogs((prev) => [...prev.filter((l) => l.id !== log.id), log])
+      if (warning) setLogError(warning)
 
       // Stay on the log screen so the optional post-exercise RPE prompt can show.
       if (completed) {
@@ -338,7 +420,7 @@ export default function App() {
       const existing = logs.find(
         (l) => l.workout_exercise_id === workoutExerciseId,
       )
-      const { log, completed } = await saveCardioLog({
+      const { log, completed, warning } = await saveCardioLog({
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         actualDurationSeconds,
@@ -349,10 +431,8 @@ export default function App() {
         logSplits,
         existingLogId: existing?.id ?? null,
       })
-      setLogs((prev) => {
-        if (existing) return prev.map((l) => (l.id === log.id ? log : l))
-        return [...prev, log]
-      })
+      setLogs((prev) => [...prev.filter((l) => l.id !== log.id), log])
+      if (warning) setLogError(warning)
       if (completed) {
         setScheduledWorkouts((prev) =>
           prev.map((sw) =>
@@ -387,7 +467,12 @@ export default function App() {
       const existing = logs.find(
         (l) => l.workout_exercise_id === workoutExerciseId,
       )
-      const { log, completed, logSplits: nextSplits } = await saveIntervalSplit({
+      const {
+        log,
+        completed,
+        warning,
+        logSplits: nextSplits,
+      } = await saveIntervalSplit({
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         splitNumber,
@@ -403,6 +488,7 @@ export default function App() {
         prev.some((l) => l.id === log.id) ? prev : [...prev, log],
       )
       setLogSplits(nextSplits)
+      if (warning) setLogError(warning)
       if (completed) {
         setScheduledWorkouts((prev) =>
           prev.map((sw) =>
@@ -419,7 +505,12 @@ export default function App() {
     }
   }
 
-  async function handleUpdateLog({ log_id, actual_reps, actual_weight }) {
+  async function handleUpdateLog({
+    log_id,
+    actual_reps,
+    actual_weight,
+    weight_unit,
+  }) {
     if (!log_id) return
     if (!session?.user?.id) {
       setLogError('Not signed in')
@@ -433,6 +524,7 @@ export default function App() {
         logId: log_id,
         actualReps: actual_reps,
         actualWeight: actual_weight,
+        weightUnit: weight_unit,
       })
       mergeUpdatedLogs([log])
     } catch (err) {
@@ -441,6 +533,54 @@ export default function App() {
       throw err
     } finally {
       setSavingLog(false)
+    }
+  }
+
+  async function handleDeleteLog(logId) {
+    const target = logs.find((l) => l.id === logId)
+    if (!target) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+    setSavingLog(true)
+    setLogError(null)
+    try {
+      const { updated } = await deleteSetLog({
+        logId,
+        workoutExerciseId: target.workout_exercise_id,
+      })
+      const byId = Object.fromEntries(updated.map((row) => [row.id, row]))
+      setLogs((prev) =>
+        prev.filter((l) => l.id !== logId).map((l) => byId[l.id] ?? l),
+      )
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not delete set — try again')
+      throw err
+    } finally {
+      setSavingLog(false)
+    }
+  }
+
+  async function handleFinishWorkout() {
+    const scheduled = getScheduledBundle(scheduledId)
+    if (!scheduled || finishingWorkout) return
+    setFinishingWorkout(true)
+    setLogError(null)
+    try {
+      await finishScheduledWorkout(scheduled.id)
+      setScheduledWorkouts((prev) =>
+        prev.map((sw) =>
+          sw.id === scheduled.id ? { ...sw, status: 'completed' } : sw,
+        ),
+      )
+      setJustCompleted(true)
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not finish workout — try again')
+    } finally {
+      setFinishingWorkout(false)
     }
   }
 
@@ -490,6 +630,59 @@ export default function App() {
     }
   }
 
+  // workout_exercise id → { exerciseId, date, … } for "last time" / PRs.
+  const weIndex = useMemo(
+    () => workoutExerciseIndex(scheduledWorkouts, workoutDetails),
+    [scheduledWorkouts, workoutDetails],
+  )
+
+  // scheduled id → { done, total, exerciseCount } for calendar/history status.
+  const progressById = useMemo(
+    () =>
+      buildScheduledProgress(scheduledWorkouts, workoutDetails, logs, logSplits),
+    [scheduledWorkouts, workoutDetails, logs, logSplits],
+  )
+
+  // Coach demo media for the open workout — fetched lazily (one query per
+  // workout), never in the global loader. Errors / missing table → no media.
+  const mediaBundle =
+    (view === 'workout' || view === 'log') && scheduledId != null
+      ? getScheduledBundle(scheduledId)
+      : null
+  const { media: exerciseMedia } = useExerciseMedia(mediaBundle?.exercises, {
+    enabled: Boolean(mediaBundle),
+  })
+
+  function changeTab(tab) {
+    setView(tab)
+    setWorkoutReturnView('calendar')
+    setScheduledId(null)
+    setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
+    setJustCompleted(false)
+  }
+
+  // Before the loading screen: a background reload must not unmount the
+  // recovery form (or its "Password updated" confirmation).
+  if (passwordRecovery) {
+    return (
+      <AuthScreen
+        key="recovery"
+        mode="recovery"
+        onAuthed={() => {
+          setPasswordRecovery(false)
+          setAuthScreenMode('login')
+        }}
+        onCancel={async () => {
+          await handleSignOut()
+          setPasswordRecovery(false)
+          setAuthScreenMode('login')
+        }}
+      />
+    )
+  }
+
   if (bootstrapping && !submitting) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16 text-center text-muted">
@@ -500,22 +693,36 @@ export default function App() {
 
   if (loadError) {
     return (
-      <div className="mx-auto max-w-lg px-4 py-16 text-center text-danger">
-        {loadError}
+      <div className="mx-auto max-w-lg px-4 py-16 text-center">
+        <p role="alert" className="text-danger">
+          {loadError}
+        </p>
+        {supabase ? (
+          <div className="mt-6 space-y-3">
+            {session?.user ? (
+              <button
+                type="button"
+                onClick={handleRetryLoad}
+                className="w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim"
+              >
+                Retry
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="w-full rounded border border-orange-dim/50 bg-surface py-3 text-sm font-medium text-ink hover:bg-surface-alt"
+            >
+              Sign out
+            </button>
+            {signOutError ? (
+              <p role="alert" className="text-sm text-danger">
+                {signOutError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-    )
-  }
-
-  if (passwordRecovery) {
-    return (
-      <AuthScreen
-        key="recovery"
-        mode="recovery"
-        onAuthed={() => {
-          setPasswordRecovery(false)
-          setAuthScreenMode('login')
-        }}
-      />
     )
   }
 
@@ -531,14 +738,26 @@ export default function App() {
     )
   }
 
-  if (needsOnboarding) {
-    return (
+  const coachWithoutProgram =
+    isCoach &&
+    ['coach', 'account', 'progress', 'leaderboard', 'proposals'].includes(view)
+
+  if (needsOnboarding && !coachWithoutProgram) {
+    const form = (
       <OnboardingForm
         onSubmit={handleOnboardingSubmit}
         error={onboardingError}
         submitting={submitting}
         onSignOut={handleSignOut}
+        signOutError={signOutError}
       />
+    )
+    if (!isCoach) return form
+    return (
+      <>
+        <div className="pb-tab-bar">{form}</div>
+        <TabBar active="calendar" onChange={changeTab} showCoach />
+      </>
     )
   }
 
@@ -595,20 +814,31 @@ export default function App() {
           />
         )
       }
+      const exerciseHistory = we.exercise_id
+        ? logs.filter(
+            (l) =>
+              weIndex.get(l.workout_exercise_id)?.exerciseId === we.exercise_id,
+          )
+        : existingLogs
       return (
         <LogSet
           key={we.id}
           workoutExercise={we}
           existingLogs={existingLogs}
+          exerciseHistory={exerciseHistory}
+          weIndex={weIndex}
+          scheduledDate={scheduled.date}
           onBack={backToWorkout}
           onSave={handleSaveLog}
           onUpdate={handleUpdateLog}
+          onDelete={handleDeleteLog}
           onSaveRpe={handleSaveRpe}
           saving={savingLog}
           savingRpe={savingRpe}
           error={logError}
           initialEditLogId={editLogId}
           initialShowRpe={logShowRpe}
+          headerExtras={<HowToDoIt items={exerciseMedia[we.id]} />}
         />
       )
     }
@@ -621,11 +851,15 @@ export default function App() {
         logs={logs}
         logSplits={logSplits}
         onBack={backToCalendar}
+        backLabel={workoutReturnView === 'history' ? 'History' : 'Calendar'}
         onLogExercise={openLog}
         onSavePain={handleSavePain}
         savingPainId={savingPainId}
+        onFinishWorkout={handleFinishWorkout}
+        finishingWorkout={finishingWorkout}
         justCompleted={justCompleted}
         error={logError}
+        renderExerciseExtras={(we) => <DemoChip items={exerciseMedia[we.id]} />}
       />
     )
   }
@@ -637,7 +871,9 @@ export default function App() {
         ? 'leaderboard'
         : view === 'account'
           ? 'account'
-          : 'calendar'
+          : view === 'coach' && isCoach
+            ? 'coach'
+            : 'calendar'
 
   return (
     <>
@@ -650,17 +886,33 @@ export default function App() {
           />
         ) : view === 'leaderboard' ? (
           <LeaderboardView currentUserId={userId ?? session.user.id} />
+        ) : view === 'coach' && isCoach ? (
+          <CoachHome coachId={userId ?? session.user.id} />
         ) : view === 'account' ? (
           <AccountView
             email={session.user.email}
             onSignOut={handleSignOut}
+            signOutError={signOutError}
             onOpenProposals={() => setView('proposals')}
+          />
+        ) : view === 'history' ? (
+          <HistoryView
+            scheduledWorkouts={scheduledWorkouts}
+            progressById={progressById}
+            getWorkout={getWorkout}
+            onSelectScheduled={openWorkout}
+            onBack={() => setView('calendar')}
           />
         ) : (
           <CalendarView
-            scheduledWorkouts={calendarScheduled}
+            scheduledWorkouts={scheduledWorkouts}
+            upcomingWorkouts={calendarScheduled}
+            progressById={progressById}
             getWorkout={getWorkout}
             onSelectScheduled={openWorkout}
+            onOpenHistory={() => setView('history')}
+            month={calendarMonth}
+            onMonthChange={setCalendarMonth}
             canGenerateNextWeek={nextWeekEligibility.ready}
             onGenerateNextWeek={handleGenerateNextWeek}
             generatingNextWeek={generatingNextWeek}
@@ -668,17 +920,7 @@ export default function App() {
           />
         )}
       </div>
-      <TabBar
-        active={topTab}
-        onChange={(tab) => {
-          setView(tab)
-          setScheduledId(null)
-          setWorkoutExerciseId(null)
-          setEditLogId(null)
-          setLogShowRpe(false)
-          setJustCompleted(false)
-        }}
-      />
+      <TabBar active={topTab} onChange={changeTab} showCoach={isCoach} />
     </>
   )
 }

@@ -8,6 +8,46 @@ function assertSupabase() {
   return supabase
 }
 
+export const ADMIN_ONLY_MESSAGE =
+  'Only an admin can approve or reject proposals.'
+
+/** Error thrown when the signed-in user is not an admin (or RLS says no). */
+export class AdminPermissionError extends Error {
+  constructor(message = ADMIN_ONLY_MESSAGE) {
+    super(message)
+    this.name = 'AdminPermissionError'
+    this.isPermissionError = true
+  }
+}
+
+/**
+ * Admin = app_metadata.role === 'admin' in the session JWT (set server-side,
+ * see README). RLS enforces this too; the client check just fails fast and
+ * avoids side effects such as creating a new exercise before the
+ * substitutions insert is rejected.
+ */
+export async function isAdminSession() {
+  const client = assertSupabase()
+  const { data } = await client.auth.getSession()
+  return data?.session?.user?.app_metadata?.role === 'admin'
+}
+
+async function assertAdmin() {
+  if (!(await isAdminSession())) throw new AdminPermissionError()
+}
+
+/** Map RLS / "0 rows updated" failures to a readable permission error. */
+function toPermissionError(error) {
+  if (!error) return error
+  // 42501 = insufficient_privilege / RLS violation (e.g. a stale session
+  // whose JWT predates the admin grant). PGRST116 (0 rows) is NOT mapped:
+  // assertAdmin() has already run, so it means the proposal was processed.
+  if (error.code === '42501') {
+    return new AdminPermissionError()
+  }
+  return error
+}
+
 export async function listPendingProposals() {
   const client = assertSupabase()
   const { data, error } = await client
@@ -236,6 +276,7 @@ export async function proposeSubstitutionsForSkippedDecisions({
 
 export async function rejectProposal(proposalId, rejectionNote = null) {
   const client = assertSupabase()
+  await assertAdmin()
   const { data, error } = await client
     .from('proposed_substitutions')
     .update({
@@ -246,7 +287,7 @@ export async function rejectProposal(proposalId, rejectionNote = null) {
     .eq('status', 'pending')
     .select()
     .single()
-  if (error) throw error
+  if (error) throw toPermissionError(error)
   return data
 }
 
@@ -256,6 +297,7 @@ export async function rejectProposal(proposalId, rejectionNote = null) {
  */
 export async function approveProposal(proposalId) {
   const client = assertSupabase()
+  await assertAdmin()
 
   const { data: proposal, error: fetchErr } = await client
     .from('proposed_substitutions')
@@ -271,37 +313,28 @@ export async function approveProposal(proposalId) {
   let needsMetadata = false
 
   if (!substituteId && proposal.proposed_new_exercise_name) {
+    // Shared catalog rows can only be created through this RPC since
+    // coach_mode.sql (direct INSERT requires owner_id = auth.uid()).
     const name = proposal.proposed_new_exercise_name.trim()
-    const { data: created, error: createErr } = await client
-      .from('exercises')
-      .insert({
-        name,
-        movement_pattern: 'other',
-        muscle_group: 'general',
-        equipment_required: null,
-        contraindication_tags: [],
-      })
-      .select()
-      .single()
+    const { data: id, error: createErr } = await client.rpc(
+      'ensure_shared_exercise',
+      { p_name: name },
+    )
+    if (createErr) throw createErr
 
-    if (createErr) {
-      const { data: existing } = await client
-        .from('exercises')
-        .select('*')
-        .ilike('name', name)
-        .maybeSingle()
-      if (!existing) throw createErr
-      substituteId = existing.id
-      createdExercise = existing
-      needsMetadata =
-        existing.equipment_required == null ||
-        !Array.isArray(existing.contraindication_tags) ||
-        existing.contraindication_tags.length === 0
-    } else {
-      substituteId = created.id
-      createdExercise = created
-      needsMetadata = true
-    }
+    const { data: existing, error: readErr } = await client
+      .from('exercises')
+      .select('*')
+      .eq('id', id)
+      .single()
+    if (readErr) throw readErr
+
+    substituteId = existing.id
+    createdExercise = existing
+    needsMetadata =
+      existing.equipment_required == null ||
+      !Array.isArray(existing.contraindication_tags) ||
+      existing.contraindication_tags.length === 0
   }
 
   if (!substituteId) {
@@ -340,7 +373,7 @@ export async function approveProposal(proposalId) {
       })
       .select()
       .single()
-    if (subErr) throw subErr
+    if (subErr) throw toPermissionError(subErr)
     substitution = inserted
   }
 
@@ -354,7 +387,7 @@ export async function approveProposal(proposalId) {
     .select()
     .single()
 
-  if (updErr) throw updErr
+  if (updErr) throw toPermissionError(updErr)
 
   return {
     proposal: updated,

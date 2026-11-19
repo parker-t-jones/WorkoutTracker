@@ -5,16 +5,25 @@ import {
   resolveTheme,
   setThemePreference,
 } from '../lib/theme'
-import { getDistanceUnit, setDistanceUnit } from '../lib/units'
+import {
+  getDistanceUnit,
+  setDistanceUnit,
+  getWeightUnit,
+  setWeightUnit,
+} from '../lib/units'
+import AthleteCoachCard from './coach/AthleteCoachCard'
 
 export default function AccountView({
   email,
   onSignOut,
+  signOutError = null,
   onOpenProposals,
 }) {
   const [pendingCount, setPendingCount] = useState(null)
   const [theme, setTheme] = useState(() => resolveTheme())
   const [distanceUnit, setDistanceUnitState] = useState(() => getDistanceUnit())
+  const [weightUnit, setWeightUnitState] = useState(() => getWeightUnit())
+  const [signingOut, setSigningOut] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -47,6 +56,20 @@ export default function AccountView({
     setDistanceUnitState(setDistanceUnit(next))
   }
 
+  function chooseWeightUnit(next) {
+    setWeightUnitState(setWeightUnit(next))
+  }
+
+  async function handleSignOutClick() {
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      await onSignOut()
+    } finally {
+      setSigningOut(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <header className="mb-6">
@@ -61,6 +84,8 @@ export default function AccountView({
         </div>
         <div className="mt-1 text-sm font-medium">{email || '—'}</div>
       </div>
+
+      <AthleteCoachCard />
 
       <div className="mt-4 rounded border border-orange-dim/40 bg-surface px-4 py-4">
         <div className="text-xs uppercase tracking-wide text-muted">
@@ -126,6 +151,37 @@ export default function AccountView({
             )
           })}
         </div>
+
+        <div className="mt-5 text-xs uppercase tracking-wide text-muted">
+          Weight
+        </div>
+        <p className="mt-1 text-sm text-muted">
+          Used for logging sets and progress charts. Saved on this device.
+        </p>
+        <div className="mt-3 flex gap-1">
+          {[
+            { id: 'lb', label: 'Pounds (lb)' },
+            { id: 'kg', label: 'Kilograms (kg)' },
+          ].map((opt) => {
+            const selected = weightUnit === opt.id
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => chooseWeightUnit(opt.id)}
+                className={[
+                  'flex-1 rounded py-2 text-sm font-medium',
+                  selected
+                    ? 'bg-orange text-on-orange'
+                    : 'bg-surface-alt text-muted ring-1 ring-orange-dim/40 hover:text-ink',
+                ].join(' ')}
+                aria-pressed={selected}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <button
@@ -152,11 +208,17 @@ export default function AccountView({
 
       <button
         type="button"
-        onClick={onSignOut}
-        className="mt-6 w-full rounded border border-orange-dim/50 bg-surface py-3 text-sm font-medium text-ink hover:bg-surface-alt"
+        onClick={handleSignOutClick}
+        disabled={signingOut}
+        className="mt-6 w-full rounded border border-orange-dim/50 bg-surface py-3 text-sm font-medium text-ink hover:bg-surface-alt disabled:opacity-60"
       >
-        Sign out
+        {signingOut ? 'Signing out…' : 'Sign out'}
       </button>
+      {signOutError ? (
+        <p role="alert" className="mt-2 text-sm text-danger">
+          {signOutError}
+        </p>
+      ) : null}
     </div>
   )
 }

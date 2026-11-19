@@ -53,17 +53,34 @@ create policy users_update_own on public.users
   using (id = auth.uid())
   with check (id = auth.uid());
 
--- exercises: shared catalog
-drop policy if exists exercises_select_authenticated on public.exercises;
-drop policy if exists exercises_insert_authenticated on public.exercises;
+-- exercises: shared catalog.
+-- Skipped once coach_mode.sql has added exercises.owner_id: from then on
+-- coach_mode.sql / 2026-11-hardening.sql own the exercises policies, and
+-- recreating these open policies here would silently undo exercise privacy.
+do $auth_exercises_policies$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'exercises'
+      and column_name = 'owner_id'
+  ) then
+    raise notice 'auth.sql: exercises.owner_id exists — leaving exercises policies untouched';
+    return;
+  end if;
 
-create policy exercises_select_authenticated on public.exercises
-  for select to authenticated
-  using (true);
+  drop policy if exists exercises_select_authenticated on public.exercises;
+  drop policy if exists exercises_insert_authenticated on public.exercises;
 
-create policy exercises_insert_authenticated on public.exercises
-  for insert to authenticated
-  with check (true);
+  create policy exercises_select_authenticated on public.exercises
+    for select to authenticated
+    using (true);
+
+  create policy exercises_insert_authenticated on public.exercises
+    for insert to authenticated
+    with check (true);
+end
+$auth_exercises_policies$;
 
 -- substitutions: shared catalog
 drop policy if exists substitutions_select_authenticated on public.substitutions;

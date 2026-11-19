@@ -5,7 +5,10 @@
 project_id = "gymtrackingapp"
 
 [functions.generate-program]
-# Anon key JWT is enough for v1 (no user auth yet). Key stays server-side via secrets.
+# The gateway check (verify_jwt) only proves the request carries a valid
+# project JWT — the public anon key passes it. The function itself then calls
+# auth.getUser() and returns 401 unless the JWT belongs to a signed-in user.
+# ANTHROPIC_API_KEY (and optional ANTHROPIC_MODEL) stay server-side as secrets.
 verify_jwt = true
 
 [api]

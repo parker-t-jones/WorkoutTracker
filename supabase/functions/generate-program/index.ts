@@ -2,8 +2,19 @@
 // Calls Anthropic with PLAN.md prompts; returns validated program JSON.
 // Secret: ANTHROPIC_API_KEY (set via `supabase secrets set`, never in client env)
 // Modes: "initial" (1 week from onboarding) | "adaptive" (next week from prior performance)
+//        | "propose-substitution"
+// Requires a signed-in user: the caller's JWT is checked with auth.getUser();
+// the anon key alone is rejected. Optional secret ANTHROPIC_MODEL overrides
+// the default model id.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import { createClient } from "jsr:@supabase/supabase-js@2"
+
+const DEFAULT_MODEL = "claude-sonnet-5"
+const MAX_BODY_BYTES = 200_000
+const MAX_CATALOG_ENTRIES = 400
+const MAX_SPLITS = 30
+const ANTHROPIC_TIMEOUT_MS = 110_000
 
 const EXERCISE_SCHEMA = `{
               "name": "string — MUST match an exercise library name exactly",
@@ -115,7 +126,16 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 function stripCodeFences(text: string): string {
-  return text.replace(/```json|```/g, "").trim()
+  return text.replace(/```(?:json)?/gi, "").trim()
+}
+
+/** Strip fences, then take the outermost {...} so stray prose can't break parsing. */
+function extractJsonObject(text: string): string {
+  const stripped = stripCodeFences(text)
+  const first = stripped.indexOf("{")
+  const last = stripped.lastIndexOf("}")
+  if (first === -1 || last <= first) return stripped
+  return stripped.slice(first, last + 1)
 }
 
 type CatalogEntry = {
@@ -126,6 +146,15 @@ type CatalogEntry = {
 
 function normName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ")
+}
+
+/** Case/punctuation-insensitive key (mirrors normalizeExerciseName in src/lib/user.js). */
+function looseName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
 }
 
 function miToUnit(mi: number, unit: string): number {
@@ -200,10 +229,12 @@ function parseIntervalPattern(
   if (text == null) return null
   const s = String(text)
   const m = s.match(
-    /(\d+)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(m|mi|miles?|km|kilometers?|min|mins|minutes?)?/i,
+    // Longest alternatives first + \b (else "0.5 mi" / "3 min" read as meters).
+    /(\d+)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|seconds?|secs?|s|miles?|mi|kilometers?|km|meters?|m)?\b/i,
   )
   if (!m) return null
-  const count = Number(m[1])
+  // Each work bout adds a recovery split; cap total splits at MAX_SPLITS.
+  const count = Math.min(Number(m[1]), Math.floor(MAX_SPLITS / 2))
   const mag = Number(m[2])
   const u = (m[3] || "").toLowerCase()
   const splits: Array<Record<string, unknown>> = []
@@ -212,15 +243,17 @@ function parseIntervalPattern(
       split_number: splits.length + 1,
       label: "work",
     }
-    if (u === "m") {
+    if (u === "m" || u.startsWith("meter")) {
       work.distance = metersToUnit(mag, unit)
       work.unit = unit
-    } else if (u.startsWith("km")) {
+    } else if (u === "km" || u.startsWith("kilometer")) {
       work.distance =
         unit === "mi" ? Math.round((mag / 1.60934) * 100) / 100 : mag
       work.unit = unit
     } else if (u.startsWith("min")) {
       work.duration_seconds = Math.round(mag * 60)
+    } else if (u === "s" || u.startsWith("sec")) {
+      work.duration_seconds = Math.round(mag)
     } else {
       work.distance = mag
       work.unit = unit
@@ -417,6 +450,10 @@ function normalizeCardioExercise(
     if (!targetSplits || targetSplits.length === 0) {
       targetSplits = defaultIntervalSplits(name, unit)
     }
+    targetSplits = targetSplits
+      .filter((s) => s != null && typeof s === "object")
+      .slice(0, MAX_SPLITS)
+    if (targetSplits.length === 0) targetSplits = defaultIntervalSplits(name, unit)
     targetSplits = targetSplits.map((s, i) => ({
       ...s,
       split_number: s.split_number ?? i + 1,
@@ -531,13 +568,28 @@ function normalizeProgramCardio(
   distanceUnit: string,
 ) {
   const byNorm = new Map(catalog.map((e) => [normName(e.name), e]))
+  const byLoose = new Map<string, CatalogEntry>()
+  for (const e of catalog) {
+    const key = looseName(e.name)
+    if (key && !byLoose.has(key)) byLoose.set(key, e)
+  }
   const unit = distanceUnit === "km" ? "km" : "mi"
   const weeks = program.weeks as Array<Record<string, unknown>>
   for (const week of weeks || []) {
     for (const day of (week.days as Array<Record<string, unknown>>) || []) {
       const exercises = (day.exercises as Array<Record<string, unknown>>) || []
       day.exercises = exercises.map((ex) => {
-        const catalogEx = byNorm.get(normName(String(ex.name || ""))) ?? null
+        const rawName = typeof ex.name === "string" ? ex.name : ""
+        let catalogEx = byNorm.get(normName(rawName)) ?? null
+        if (!catalogEx && rawName) {
+          // "pull up" / "Pull-Up" → the catalog's exact spelling. Names with
+          // no close match are left alone; the client creates them via the
+          // ensure_shared_exercise RPC.
+          catalogEx = byLoose.get(looseName(rawName)) ?? null
+        }
+        if (catalogEx && rawName !== catalogEx.name) {
+          ex = { ...ex, name: catalogEx.name }
+        }
         return normalizeCardioExercise(ex, catalogEx, unit)
       })
       ensureCardioWarmup(day, unit)
@@ -829,26 +881,47 @@ Exercise library (prefer these exact names when suitable):
 ${names.join(", ")}`
 }
 
+type AnthropicResult =
+  | { data: unknown; error?: undefined; status?: undefined }
+  | { data?: undefined; error: string; status: number }
+
 async function callAnthropic(
   apiKey: string,
   system: string,
   userPrompt: string,
   maxTokens = 2000,
-) {
-  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-5",
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
-  })
+): Promise<AnthropicResult> {
+  const model = Deno.env.get("ANTHROPIC_MODEL")?.trim() || DEFAULT_MODEL
+
+  let anthropicRes: Response
+  try {
+    anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: userPrompt }],
+      }),
+      signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
+    })
+  } catch (err) {
+    const name = (err as { name?: string })?.name
+    if (name === "TimeoutError" || name === "AbortError") {
+      console.error("Anthropic request timed out after", ANTHROPIC_TIMEOUT_MS, "ms")
+      return {
+        error: "The AI took too long to respond. Please try again.",
+        status: 504,
+      }
+    }
+    console.error("Anthropic request failed:", err)
+    return { error: "couldn't reach the AI service, try again", status: 502 }
+  }
 
   if (!anthropicRes.ok) {
     const errText = await anthropicRes.text()
@@ -857,6 +930,16 @@ async function callAnthropic(
   }
 
   const anthropicJson = await anthropicRes.json()
+
+  if (anthropicJson?.stop_reason === "max_tokens") {
+    console.error("Anthropic response hit max_tokens:", maxTokens)
+    return {
+      error:
+        "The AI response was too long and got cut off. Please try again (a shorter session length can help).",
+      status: 502,
+    }
+  }
+
   const rawText =
     anthropicJson?.content
       ?.filter((block: { type: string }) => block.type === "text")
@@ -868,10 +951,66 @@ async function callAnthropic(
   }
 
   try {
-    return { data: JSON.parse(stripCodeFences(rawText)) }
+    return { data: JSON.parse(extractJsonObject(rawText)) }
   } catch (parseErr) {
     console.error("JSON parse failed:", parseErr, rawText.slice(0, 500))
     return { error: "couldn't generate program, try again", status: 502 }
+  }
+}
+
+/** Resolve the signed-in user from the request's Authorization header. */
+async function requireUser(req: Request): Promise<{ id: string } | null> {
+  const authHeader = req.headers.get("Authorization") ?? ""
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim()
+  if (!token) return null
+
+  const url = Deno.env.get("SUPABASE_URL")
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY")
+  if (!url || !anonKey) {
+    throw new Error("SUPABASE_URL / SUPABASE_ANON_KEY are not available")
+  }
+
+  const supabase = createClient(url, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+  // Pass the JWT explicitly: there is no stored session server-side. The anon
+  // key is a valid JWT but has no user (no sub), so getUser() rejects it.
+  const { data, error } = await supabase.auth.getUser(token)
+  if (error || !data?.user) return null
+  return { id: data.user.id }
+}
+
+async function readJsonBody(
+  req: Request,
+): Promise<{ body: Record<string, unknown> } | { response: Response }> {
+  const declared = Number(req.headers.get("content-length") ?? "0")
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return { response: jsonResponse({ error: "Request body too large" }, 413) }
+  }
+  const text = await req.text()
+  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) {
+    return { response: jsonResponse({ error: "Request body too large" }, 413) }
+  }
+  try {
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { response: jsonResponse({ error: "Body must be a JSON object" }, 400) }
+    }
+    return { body: parsed as Record<string, unknown> }
+  } catch {
+    return { response: jsonResponse({ error: "Invalid JSON body" }, 400) }
+  }
+}
+
+/** Keep the prompt bounded: truncate catalog / name lists. */
+function capCatalogs(body: Record<string, unknown>) {
+  if (Array.isArray(body.exercise_catalog) && body.exercise_catalog.length > MAX_CATALOG_ENTRIES) {
+    console.warn("exercise_catalog truncated from", body.exercise_catalog.length)
+    body.exercise_catalog = body.exercise_catalog.slice(0, MAX_CATALOG_ENTRIES)
+  }
+  if (Array.isArray(body.exercise_names) && body.exercise_names.length > MAX_CATALOG_ENTRIES) {
+    body.exercise_names = body.exercise_names.slice(0, MAX_CATALOG_ENTRIES)
   }
 }
 
@@ -885,7 +1024,22 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const body = await req.json()
+    let user: { id: string } | null
+    try {
+      user = await requireUser(req)
+    } catch (err) {
+      console.error("Auth check misconfigured:", err)
+      return jsonResponse({ error: "Server auth is not configured" }, 500)
+    }
+    if (!user) {
+      return jsonResponse({ error: "Sign in required" }, 401)
+    }
+
+    const parsedBody = await readJsonBody(req)
+    if ("response" in parsedBody) return parsedBody.response
+    const body = parsedBody.body
+    capCatalogs(body)
+
     const mode =
       body?.mode === "adaptive"
         ? "adaptive"
@@ -902,7 +1056,10 @@ Deno.serve(async (req) => {
     }
 
     if (mode === "propose-substitution") {
-      if (!body?.primary_exercise?.name) {
+      const primaryExercise = body.primary_exercise as
+        | { name?: unknown }
+        | undefined
+      if (!primaryExercise || typeof primaryExercise.name !== "string" || !primaryExercise.name) {
         return jsonResponse(
           { error: "propose-substitution requires primary_exercise" },
           400,
@@ -950,6 +1107,14 @@ Deno.serve(async (req) => {
       )
     }
 
+    const daysNum = Number(days_per_week)
+    if (!Number.isInteger(daysNum) || daysNum < 1 || daysNum > 7) {
+      return jsonResponse(
+        { error: "days_per_week must be a whole number from 1 to 7" },
+        400,
+      )
+    }
+
     if (mode === "adaptive") {
       if (
         body.next_week_number == null ||
@@ -978,7 +1143,10 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: result.error }, result.status ?? 502)
     }
 
-    const program = result.data
+    const program = result.data as {
+      weeks?: Array<Record<string, unknown>>
+      duration_weeks?: number
+    } | null
 
     // Normalize week_number for adaptive if model drifts slightly.
     if (

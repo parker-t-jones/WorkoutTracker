@@ -14,6 +14,7 @@ import {
   roundWeight,
 } from '../lib/units'
 import { logWeightIn } from '../lib/progress'
+import { formatDateKey } from '../lib/dates'
 
 function prescribeLabel(we) {
   if (isCardioExercise(we)) {
@@ -54,6 +55,7 @@ export default function WorkoutDetail({
   logs,
   logSplits = [],
   onBack,
+  backLabel = 'Calendar',
   onLogExercise,
   onSavePain,
   savingPainId,
@@ -117,14 +119,14 @@ export default function WorkoutDetail({
       <button
         type="button"
         onClick={onBack}
-        className="mb-4 text-sm text-muted hover:text-ink"
+        className="-ml-2 mb-2 min-h-11 px-2 text-sm text-muted hover:text-ink"
       >
-        ← Calendar
+        ← {backLabel}
       </button>
 
       <header className="mb-6">
         <p className="font-display text-sm text-muted">
-          Week {workout.week_number} · Day {workout.day_number} · {date}
+          Week {workout.week_number} · Day {workout.day_number} · {formatDateKey(date)}
         </p>
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           {workout.focus}

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatDateKey } from '../../lib/dates'
 import {
   exercisePainNote,
   exerciseHasPain,
@@ -70,7 +71,7 @@ export default function CoachWorkoutView({
         <p className="font-display text-sm text-muted">
           {athleteName ? `${athleteName} · ` : ''}
           {workout ? `Week ${workout.week_number} · Day ${workout.day_number} · ` : ''}
-          {scheduled.date}
+          {formatDateKey(scheduled.date)}
         </p>
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           {workout?.focus ?? 'Workout'}

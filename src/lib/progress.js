@@ -16,6 +16,9 @@ export function currentWeekRange(from = new Date()) {
 }
 
 export function toDateKey(date) {
+  // A plain YYYY-MM-DD is already a local date key — new Date('YYYY-MM-DD')
+  // would parse it as UTC midnight (the previous day west of Greenwich).
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) return date
   const d = date instanceof Date ? date : new Date(date)
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')

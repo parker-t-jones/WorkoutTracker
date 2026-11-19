@@ -178,7 +178,13 @@ function buildSubmitAnswers(answers) {
   }
 }
 
-export default function OnboardingForm({ onSubmit, error, submitting, onSignOut }) {
+export default function OnboardingForm({
+  onSubmit,
+  error,
+  submitting,
+  onSignOut,
+  signOutError = null,
+}) {
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState(1)
   const [animKey, setAnimKey] = useState(0)
@@ -273,6 +279,11 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
           Sign out
         </button>
       </div>
+      {signOutError ? (
+        <p role="alert" className="-mt-4 mb-4 text-right text-sm text-danger">
+          {signOutError}
+        </p>
+      ) : null}
 
       <div
         className="mb-6 h-1 overflow-hidden rounded bg-surface-alt"

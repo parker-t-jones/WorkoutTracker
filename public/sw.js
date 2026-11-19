@@ -1,5 +1,11 @@
 /* Minimal app-shell cache. Same-origin GETs only — no API/offline logging. */
-const CACHE = 'workout-shell-v1'
+
+// Replaced with a unique build id by the sw-version plugin in vite.config.js
+// on every `vite build`, so each deploy gets a fresh cache and the browser
+// sees a changed sw.js. (Unreplaced in dev, where the SW isn't registered.)
+const VERSION = '__SW_VERSION__'
+const CACHE_PREFIX = 'workout-shell-'
+const CACHE = `${CACHE_PREFIX}${VERSION}`
 
 const PRECACHE = [
   '/',
@@ -11,12 +17,14 @@ const PRECACHE = [
 ]
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => cache.addAll(PRECACHE))
-      .then(() => self.skipWaiting()),
-  )
+  // No skipWaiting here: a new version waits until the page asks for it
+  // (the "Update available — Reload" toast in src/pwa.js), so an open
+  // workout isn't swapped out from under the user mid-session.
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)))
+})
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {
@@ -24,7 +32,11 @@ self.addEventListener('activate', (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))),
+        Promise.all(
+          keys
+            .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE)
+            .map((key) => caches.delete(key)),
+        ),
       )
       .then(() => self.clients.claim()),
   )
@@ -43,23 +55,37 @@ self.addEventListener('fetch', (event) => {
     (request.headers.get('accept') || '').includes('text/html')
 
   if (isDocument) {
-    event.respondWith(networkFirst(request, '/index.html'))
+    event.respondWith(networkFirstDocument(request, url))
     return
   }
 
   event.respondWith(staleWhileRevalidate(request))
 })
 
-async function networkFirst(request, fallbackUrl) {
+/**
+ * Navigations: network first, falling back to the cached shell. Only the
+ * plain shell is cached (under /index.html) — never URLs with query strings
+ * such as auth callbacks (?code=…), which are one-time and user-specific.
+ */
+async function networkFirstDocument(request, url) {
   try {
     const response = await fetch(request)
-    if (response.ok) {
+    if (
+      response.ok &&
+      !response.redirected &&
+      url.search === '' &&
+      (url.pathname === '/' || url.pathname === '/index.html')
+    ) {
       const cache = await caches.open(CACHE)
-      cache.put(request, response.clone())
+      cache.put('/index.html', response.clone())
     }
     return response
   } catch {
-    return (await caches.match(request)) || (await caches.match(fallbackUrl))
+    return (
+      (await caches.match('/index.html', { cacheName: CACHE })) ||
+      (await caches.match('/index.html')) ||
+      Response.error()
+    )
   }
 }
 
@@ -71,7 +97,7 @@ async function staleWhileRevalidate(request) {
       if (response.ok) cache.put(request, response.clone())
       return response
     })
-    .catch(() => cached)
+    .catch(() => cached || Response.error())
 
   return cached || network
 }

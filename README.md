@@ -30,7 +30,7 @@ All SQL is applied by hand in the Supabase **SQL editor**. Run in this order
 | 9 | `supabase/auth.sql` | Auth FK + RLS on all tables (see **Auth** below — run after signing up) |
 | 10 | `supabase/leaderboard.sql` | `family_leaderboard` RPC |
 | 11 | `supabase/coach_mode.sql` | Coach/athlete links, coach RLS, custom exercises, templates |
-| 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups + streak fix, `ensure_shared_exercise`, `logs.weight_unit`) |
+| 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups + streak fix, `ensure_shared_exercise`, `logs.weight_unit`, coach demo media table + `exercise-media` storage bucket) |
 
 **Always run `2026-11-hardening.sql` last.** If you ever re-run an older file
 (especially `auth.sql`, `coach_mode.sql`, `exercises-substitutions.sql`,
@@ -122,6 +122,84 @@ the anon key:
 curl -i -X POST "https://<ref>.supabase.co/functions/v1/generate-program" \
   -H "Authorization: Bearer <anon key>" -H "Content-Type: application/json" -d '{}'
 ```
+
+### Coach mode & exercise demos
+
+Coaches can upload photos/videos (or paste YouTube/Vimeo/other links) that
+show athletes how to do an exercise — TrueCoach-style. Everything below needs
+`supabase/2026-11-hardening.sql` (section 9 creates the `exercise_media` table
+and the private `exercise-media` storage bucket + its policies).
+
+**Make a coach.** See *Granting coach and admin* above (`update public.users
+set is_coach = true …`), then have them reload the app — a **Coach** tab
+appears. A coach who doesn't train with the app lands on the Coach tab
+instead of onboarding.
+
+**Invite flow.**
+1. The athlete signs up and opens the app once (so a `public.users` row exists).
+2. Coach → **Coach** tab → *Invite an athlete* → their email.
+3. Athlete → **Account** → *Coach* card → **Accept** (or Decline).
+4. Coach taps the athlete → schedule (upcoming + recent, read-only) → a
+   workout → each exercise shows the prescription, what the athlete logged
+   (sets, RPE, "felt off") and a **Demo media** manager.
+5. Either side can end it (coach: *End* on the athlete; athlete: *End
+   coaching*). Access to workouts, logs **and** demo media stops immediately.
+   A coach can re-invite an ended athlete; they must accept again.
+
+**Demo scope.** When adding media the coach picks:
+- *Just this workout* — attached to that one prescribed exercise
+  (`workout_exercise_id`); only that athlete sees it.
+- *Use for every athlete when I assign this exercise* — the coach's default
+  demo for the exercise (`exercise_id`); shown wherever any of their
+  **active** athletes has that exercise. Workout-specific items show first.
+
+Athletes see a **Watch demo** chip on the workout screen and a collapsible
+**How to do it** section on the strength logging screen. Media loads lazily
+per workout; if the migration hasn't been run, the app simply shows no media.
+
+**Limits (Supabase free plan).** 1 GB total file storage and **50 MB per
+file** (the bucket enforces 50 MB and image/jpeg, png, webp, gif, heic +
+video/mp4, quicktime, webm). A minute of phone video is often 50–150 MB, so
+for anything longer than a short clip upload it to YouTube (unlisted), Vimeo
+or Google Drive and use **Add link** — YouTube/Vimeo play inside the app
+(youtube-nocookie / player.vimeo embeds); other links open in a new tab.
+HEIC photos and HEVC `.mov` videos only display in Safari; the viewer shows
+an "Open" fallback elsewhere. Files are private: the app uses signed URLs
+that expire after an hour.
+
+Deleting a demo in the app also deletes its file. Files whose row was removed
+by a cascade (athlete/workout/exercise deleted) are not auto-deleted —
+clean them up occasionally in Dashboard → Storage → `exercise-media`
+(folder name = coach's user id).
+
+**Verify media isolation** (SQL editor, same impersonation pattern as
+*Verify isolation*; use coach A, coach B, athlete C of A, unrelated athlete
+D, and an athlete E whose link with A was ended):
+
+```sql
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims',
+  '{"sub":"<uuid>","role":"authenticated"}', true);
+select coach_id, exercise_id, workout_exercise_id, kind from exercise_media;
+select name from storage.objects where bucket_id = 'exercise-media';
+rollback;
+```
+
+- [ ] Coach A sees only rows with `coach_id = A`; coach B sees none of A's.
+- [ ] Athlete C sees A's exercise-level rows + A's rows on C's own workouts,
+      and only objects under `A/…`.
+- [ ] Athletes D and E (and anyone with a *pending* invite from A) see 0 of
+      A's rows and 0 objects under `A/…`.
+- [ ] As A, `insert into exercise_media (coach_id, workout_exercise_id, kind,
+      external_url) values ('<A>', '<a workout_exercise of D or E>', 'link',
+      'https://x.com')` fails with a row-level security error.
+- [ ] As C (not a coach), inserting into `exercise_media` or uploading to
+      `exercise-media` fails.
+- [ ] `set local role anon; select count(*) from exercise_media;` → permission
+      denied; `storage.objects` → 0 rows.
+- [ ] In the app: end the relationship as C, reopen the workout → demos gone;
+      a previously copied signed URL keeps working until it expires (≤1 h).
 
 ### Day 2 — AI program generation (Edge Function)
 

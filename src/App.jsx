@@ -198,6 +198,7 @@ export default function App() {
         workouts: Object.values(workoutsById),
         workoutDetails,
         logs,
+        logSplits,
       })
 
       // Always reload calendar data after insert — don't rely on pre-generate state.

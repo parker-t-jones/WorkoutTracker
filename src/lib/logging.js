@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { computePace } from './units'
+import { computePace, convertWeight } from './units'
 import { workSplitNumbers, countLoggedWorkSplits } from './intervals'
 
 function assertSupabase() {
@@ -89,8 +89,7 @@ export function isExerciseFullyLogged(we, logs, logSplits = []) {
 async function insertLogRow(client, payload) {
   let res = await client.from('logs').insert(payload).select().single()
   if (res.error && 'weight_unit' in payload && isMissingWeightUnit(res.error)) {
-    const { weight_unit: _drop, ...rest } = payload
-    res = await client.from('logs').insert(rest).select().single()
+    res = await client.from('logs').insert(withoutWeightUnit(payload)).select().single()
   }
   if (res.error) throw res.error
   return res.data
@@ -107,11 +106,23 @@ async function updateLogRow(client, logId, userId, fields) {
       .single()
   let res = await run(fields)
   if (res.error && 'weight_unit' in fields && isMissingWeightUnit(res.error)) {
-    const { weight_unit: _drop, ...rest } = fields
-    res = await run(rest)
+    res = await run(withoutWeightUnit(fields))
   }
   if (res.error) throw res.error
   return res.data
+}
+
+/**
+ * Pre-migration fallback: rows without weight_unit are read as pounds, so a
+ * kg entry must be stored converted to lb or it would later display as
+ * (and progress/e1RM would treat it as) the same number in pounds.
+ */
+function withoutWeightUnit(fields) {
+  const { weight_unit: unit, ...rest } = fields
+  if (unit === 'kg' && rest.actual_weight != null) {
+    rest.actual_weight = convertWeight(rest.actual_weight, 'kg', 'lb')
+  }
+  return rest
 }
 
 function isMissingWeightUnit(error) {

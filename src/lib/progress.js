@@ -1,4 +1,5 @@
 import { convertWeight, roundWeight } from './units'
+import { prDisplay } from './equipment.js'
 
 /** Local Monday 00:00 → Sunday 23:59:59 of the week containing `from`. */
 export function currentWeekRange(from = new Date()) {
@@ -211,7 +212,11 @@ export function weightProgressByExercise(logs, workoutDetails, unit = 'lb') {
   return results
 }
 
-/** Best e1RM per lift (reps ≤ 12, weight > 0), highest first. */
+/**
+ * Best set per lift (reps ≤ 12, weight > 0), ranked by e1RM so sets with
+ * different reps compare fairly. Each record carries prDisplay() flags:
+ * perDumbbell (label "each") and showE1rm (only meaningful for barbell lifts).
+ */
 export function personalRecords(logs, workoutDetails, unit = 'lb') {
   const lookup = exerciseLookupFromDetails(workoutDetails)
   const best = new Map()
@@ -229,6 +234,7 @@ export function personalRecords(logs, workoutDetails, unit = 'lb') {
         weight: roundWeight(logWeightIn(log, unit)),
         reps: Number(log.actual_reps),
         date: toDateKey(log.completed_at),
+        ...prDisplay(meta.we),
       })
     }
   }
@@ -247,6 +253,7 @@ export function exerciseLookupFromDetails(workoutDetails) {
       byWeId.set(we.id, {
         exerciseId: we.exercise_id,
         name: we.exercise?.name ?? 'Exercise',
+        we,
       })
     }
   }

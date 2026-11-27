@@ -110,3 +110,21 @@ test('parseGuidanceWeight: dumbbell totals are halved', () => {
   assert.equal(parseGuidanceWeight('20 lb per side', 'lb', { perHand: true }), 20)
   assert.equal(parseGuidanceWeight(null), null)
 })
+
+import { prDisplay } from '../src/lib/equipment.js'
+
+test('prDisplay: dumbbells get "each", no e1RM', () => {
+  assert.deepEqual(prDisplay(ex('Dumbbell Bench Press')), { perDumbbell: true, showE1rm: false })
+  assert.deepEqual(prDisplay(ex('Dumbbell Row', 'dumbbell')), { perDumbbell: true, showE1rm: false })
+  assert.deepEqual(prDisplay(ex('Goblet Squat', 'dumbbell')), { perDumbbell: false, showE1rm: false })
+  assert.deepEqual(prDisplay(ex('Lateral Raise', null, { weight_guidance: '15 lb dumbbells' })), { perDumbbell: true, showE1rm: false })
+})
+
+test('prDisplay: barbell compounds keep e1RM', () => {
+  assert.equal(prDisplay(ex('Back Squat', 'barbell')).showE1rm, true)
+  assert.equal(prDisplay(ex('Deadlift')).showE1rm, true)
+  assert.equal(prDisplay(ex('Bench Press')).showE1rm, true)
+  assert.equal(prDisplay(ex('Bulgarian Split Squat')).showE1rm, false)
+  assert.equal(prDisplay(ex('Leg Press', 'machine')).showE1rm, false)
+  assert.equal(prDisplay(ex('Lat Pulldown', 'cable')).showE1rm, false)
+})

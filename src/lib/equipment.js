@@ -107,3 +107,29 @@ export function parseGuidanceWeight(guidance, unit = 'lb', { perHand = false } =
   }
   return null
 }
+
+// Big barbell lifts where a one-rep-max estimate is a number lifters actually use.
+const E1RM_NAME_RE =
+  /\b(?:back|front|box|pause|paused)?\s*squat\b|\bdead-?lift\b|\bbench\s+press\b|\boverhead\s+press\b|\bmilitary\s+press\b|\bpush\s+press\b|\bclean\b|\bsnatch\b|\bjerk\b|\bhip\s+thrust\b|\bbarbell\b/i
+const NOT_E1RM_RE = /\bgoblet\b|\bsplit\s+squat\b|\bbulgarian\b|\bpistol\b|\bjump\b/i
+
+/**
+ * How a lift's personal record should be presented.
+ * - perDumbbell: weight is one dumbbell of a pair → label "lb each".
+ * - showE1rm: an estimated 1RM is meaningful (barbell compound lifts only);
+ *   otherwise lead with the best set.
+ */
+export function prDisplay(we) {
+  const name = String(we?.exercise?.name ?? we?.name ?? '')
+  const equipment = String(we?.exercise?.equipment_required ?? we?.equipment_required ?? '')
+    .toLowerCase()
+    .trim()
+  const db = dumbbellInfo(we)
+  const perDumbbell = db.isDumbbell && !db.single
+  let showE1rm = false
+  if (!db.isDumbbell && !KETTLEBELL_RE.test(name) && !NOT_E1RM_RE.test(name)) {
+    if (equipment === 'barbell' || equipment === 'trap bar') showE1rm = true
+    else if (!equipment || equipment === 'none') showE1rm = E1RM_NAME_RE.test(name)
+  }
+  return { perDumbbell, showE1rm }
+}

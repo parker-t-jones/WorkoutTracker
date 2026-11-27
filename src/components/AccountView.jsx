@@ -18,6 +18,7 @@ export default function AccountView({
   onSignOut,
   signOutError = null,
   onOpenProposals,
+  onCoachLinksChange,
 }) {
   const [pendingCount, setPendingCount] = useState(null)
   const [theme, setTheme] = useState(() => resolveTheme())
@@ -85,7 +86,7 @@ export default function AccountView({
         <div className="mt-1 text-sm font-medium">{email || '—'}</div>
       </div>
 
-      <AthleteCoachCard />
+      <AthleteCoachCard onLinksChange={onCoachLinksChange} />
 
       <div className="mt-4 rounded border border-orange-dim/40 bg-surface px-4 py-4">
         <div className="text-xs uppercase tracking-wide text-muted">

@@ -43,6 +43,19 @@ import {
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
 import { workoutExerciseIndex } from './lib/progress'
 import { buildScheduledProgress } from './lib/schedule'
+import { listMyCoachLinks, todayIso } from './lib/coach'
+import { equipmentAllowedForAccess } from './lib/adapt'
+import {
+  hasActiveCoach,
+  isWorkoutWeekLocked,
+  sortWorkoutExercises,
+} from './lib/workoutEditing'
+import {
+  deleteWorkoutExercise,
+  fetchExerciseLibrary,
+  insertWorkoutExercise,
+  updateWorkoutExercise,
+} from './lib/workoutEditApi'
 
 export default function App() {
   const [bootstrapping, setBootstrapping] = useState(true)
@@ -72,6 +85,16 @@ export default function App() {
   // 2026-11-notes-and-editing.sql is run (then notes fall back to logs.pain_*).
   const [exerciseNotes, setExerciseNotes] = useState([])
   const [notesAvailable, setNotesAvailable] = useState(true)
+  // Athlete-side coach status, from list_my_coach_links: 'self' (AI trainer,
+  // may edit own workouts), 'coached' (active coach — no edit controls) or
+  // 'unknown' (still loading / failed to load — no edit controls either).
+  const [coachStatus, setCoachStatus] = useState('unknown')
+  const [equipmentAccess, setEquipmentAccess] = useState(null)
+  // Exercise library for the workout editor (loaded on first use).
+  const [exerciseLibrary, setExerciseLibrary] = useState(null)
+  const [libraryError, setLibraryError] = useState(null)
+  // Edits to workout_exercises run one at a time (optimistic UI first).
+  const editQueueRef = useRef(Promise.resolve())
 
   const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | coach | workout | log | week-summary | proposals
   // Where "back" from a workout goes (it can be opened from the history list).
@@ -111,6 +134,21 @@ export default function App() {
     setNeedsOnboarding(data.scheduledWorkouts.length === 0)
   }, [])
 
+  const loadCoachStatus = useCallback(async () => {
+    try {
+      const links = await listMyCoachLinks()
+      setCoachStatus(hasActiveCoach(links) ? 'coached' : 'self')
+    } catch (err) {
+      // Coach RPCs not migrated → nobody can have a coach yet.
+      if (/aren.t set up yet/i.test(err?.message || '')) {
+        setCoachStatus('self')
+      } else {
+        console.warn('[coach] could not load coach status', err)
+        setCoachStatus('unknown')
+      }
+    }
+  }, [])
+
   const refresh = useCallback(
     async (authUser) => {
       if (!supabase) {
@@ -132,6 +170,9 @@ export default function App() {
         const profile = await ensureProfile(user)
         const coach = Boolean(profile?.is_coach)
         setIsCoach(coach)
+        setEquipmentAccess(profile?.equipment_access ?? null)
+        // Not awaited: edit controls just stay hidden until it resolves.
+        loadCoachStatus()
         const data = await loadProgramData(user.id)
         applyProgramData(data)
         // A coach who doesn't train with the app lands on the Coach tab
@@ -146,7 +187,7 @@ export default function App() {
         setBootstrapping(false)
       }
     },
-    [applyProgramData],
+    [applyProgramData, loadCoachStatus],
   )
 
   const refreshRef = useRef(refresh)
@@ -199,6 +240,10 @@ export default function App() {
         loadedUserIdRef.current = null
         setUserId(null)
         setIsCoach(false)
+        setCoachStatus('unknown')
+        setEquipmentAccess(null)
+        setExerciseLibrary(null)
+        setLibraryError(null)
         setLoadError(null)
         setAdaptationSummary(null)
         setSignOutError(null)
@@ -719,6 +764,167 @@ export default function App() {
     return handleSaveNote({ workoutExerciseId: weId, note: '', isPain: false })
   }
 
+  async function handleLoadLibrary() {
+    setLibraryError(null)
+    try {
+      setExerciseLibrary(await fetchExerciseLibrary())
+    } catch (err) {
+      console.error(err)
+      setLibraryError(err?.message || 'Could not load the exercise library')
+    }
+  }
+
+  /** Replace one workout's exercise list (kept in display order). */
+  function setWorkoutExercises(workoutId, fn) {
+    setWorkoutDetails((prev) => {
+      const detail = prev[workoutId]
+      if (!detail) return prev
+      return {
+        ...prev,
+        [workoutId]: {
+          ...detail,
+          exercises: sortWorkoutExercises(fn(detail.exercises)),
+        },
+      }
+    })
+  }
+
+  function enqueueEdit(task) {
+    const run = editQueueRef.current.then(task)
+    editQueueRef.current = run.catch(() => {})
+    return run
+  }
+
+  /**
+   * Athlete edits to their own workout, persisted immediately. Each op is
+   * applied to workoutDetails at once (so LogSet / progress see it) and
+   * rolled back if the write fails; writes are serialised so rapid taps
+   * land in order. Rejects with a user-facing message.
+   *   { type: 'update', workoutId, weId, patch, exercise? }
+   *   { type: 'add', workoutId, row, exercise }
+   *   { type: 'remove', workoutId, weId }
+   *   { type: 'reorder', workoutId, patches: [{ id, sort_order }] }
+   */
+  function handleEditWorkout(op) {
+    const detail = workoutDetails[op.workoutId]
+    if (!detail) return Promise.reject(new Error('Workout not found'))
+    const { workoutId } = op
+
+    if (op.type === 'update') {
+      const before = detail.exercises.find((we) => we.id === op.weId)
+      if (!before) return Promise.reject(new Error('Exercise not found'))
+      const optimistic = {
+        ...op.patch,
+        ...(op.exercise ? { exercise: op.exercise } : {}),
+      }
+      setWorkoutExercises(workoutId, (list) =>
+        list.map((we) => (we.id === op.weId ? { ...we, ...optimistic } : we)),
+      )
+      return enqueueEdit(() => updateWorkoutExercise(op.weId, op.patch)).then(
+        (row) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.map((we) => (we.id === row.id ? { ...we, ...row } : we)),
+          )
+        },
+        (err) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.map((we) => (we.id === op.weId ? before : we)),
+          )
+          throw err
+        },
+      )
+    }
+
+    if (op.type === 'add') {
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const hasSortOrder = detail.exercises.every((we) => we.sort_order != null)
+      const maxOrder = Math.max(0, ...detail.exercises.map((we) => we.sort_order ?? 0))
+      setWorkoutExercises(workoutId, (list) => [
+        ...list,
+        {
+          ...op.row,
+          id: tempId,
+          exercise: op.exercise,
+          ...(hasSortOrder ? { sort_order: maxOrder + 1 } : {}),
+        },
+      ])
+      return enqueueEdit(() => insertWorkoutExercise(op.row)).then(
+        (row) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.map((we) => (we.id === tempId ? row : we)),
+          )
+        },
+        (err) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.filter((we) => we.id !== tempId),
+          )
+          throw err
+        },
+      )
+    }
+
+    if (op.type === 'remove') {
+      const before = detail.exercises.find((we) => we.id === op.weId)
+      if (!before) return Promise.reject(new Error('Exercise not found'))
+      if (logs.some((l) => l.workout_exercise_id === op.weId)) {
+        return Promise.reject(
+          new Error('This exercise has logged sets — delete them before removing it.'),
+        )
+      }
+      setWorkoutExercises(workoutId, (list) => list.filter((we) => we.id !== op.weId))
+      return enqueueEdit(() => deleteWorkoutExercise(op.weId)).then(
+        () => {
+          // ON DELETE CASCADE removed the note too.
+          setExerciseNotes((prev) =>
+            prev.filter((n) => n.workout_exercise_id !== op.weId),
+          )
+        },
+        (err) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.some((we) => we.id === before.id) ? list : [...list, before],
+          )
+          throw err
+        },
+      )
+    }
+
+    if (op.type === 'reorder') {
+      const previous = new Map(detail.exercises.map((we) => [we.id, we.sort_order]))
+      const byId = new Map(op.patches.map((p) => [p.id, p.sort_order]))
+      setWorkoutExercises(workoutId, (list) =>
+        list.map((we) => (byId.has(we.id) ? { ...we, sort_order: byId.get(we.id) } : we)),
+      )
+      return enqueueEdit(async () => {
+        const done = []
+        try {
+          for (const p of op.patches) {
+            await updateWorkoutExercise(p.id, { sort_order: p.sort_order })
+            done.push(p.id)
+          }
+        } catch (err) {
+          // Best effort: put back the rows that already moved.
+          for (const id of done) {
+            try {
+              await updateWorkoutExercise(id, { sort_order: previous.get(id) })
+            } catch (revertErr) {
+              console.error('Could not revert reorder:', revertErr)
+            }
+          }
+          throw err
+        }
+      }).catch((err) => {
+        setWorkoutExercises(workoutId, (list) =>
+          list.map((we) =>
+            previous.has(we.id) ? { ...we, sort_order: previous.get(we.id) } : we,
+          ),
+        )
+        throw err
+      })
+    }
+
+    return Promise.reject(new Error('Unknown edit'))
+  }
+
   // workout_exercise id → { exerciseId, date, … } for "last time" / PRs.
   const weIndex = useMemo(
     () => workoutExerciseIndex(scheduledWorkouts, workoutDetails),
@@ -934,6 +1140,23 @@ export default function App() {
   }
 
   if (view === 'workout' && scheduled) {
+    // Editing: only athletes WITHOUT an active coach ("AI trainer"), only
+    // workouts they built themselves (created_by; absent before the
+    // migration), and not once the week is done with (see
+    // isWorkoutWeekLocked). The server enforces the coach rule as well.
+    const w = scheduled.workout
+    const weekScheduled = scheduledWorkouts.filter(
+      (sw) => workoutsById[sw.workout_id]?.week_number === w.week_number,
+    )
+    const canEditWorkout =
+      coachStatus === 'self' &&
+      (w.created_by == null || w.created_by === userId) &&
+      !isWorkoutWeekLocked({
+        weekNumber: w.week_number,
+        maxWeekNumber: nextWeekEligibility.maxWeek,
+        weekScheduled,
+        todayKey: todayIso(),
+      })
     return (
       <WorkoutDetail
         scheduled={scheduled}
@@ -951,6 +1174,14 @@ export default function App() {
         justCompleted={justCompleted}
         error={logError}
         renderExerciseExtras={(we) => <DemoChip items={exerciseMedia[we.id]} />}
+        canEdit={canEditWorkout}
+        onEditWorkout={handleEditWorkout}
+        exerciseLibrary={exerciseLibrary}
+        libraryError={libraryError}
+        onLoadLibrary={handleLoadLibrary}
+        equipmentAllowed={
+          equipmentAccess ? equipmentAllowedForAccess(equipmentAccess) : null
+        }
       />
     )
   }
@@ -985,6 +1216,7 @@ export default function App() {
             onSignOut={handleSignOut}
             signOutError={signOutError}
             onOpenProposals={() => setView('proposals')}
+            onCoachLinksChange={loadCoachStatus}
           />
         ) : view === 'history' ? (
           <HistoryView

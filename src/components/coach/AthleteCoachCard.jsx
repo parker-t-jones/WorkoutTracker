@@ -9,8 +9,10 @@ import {
  * Account → "Coach" card for the athlete side of coach links: accept or
  * decline pending invites, end an active coaching relationship.
  * Hidden entirely if the coach RPCs aren't available (migration not run).
+ * onLinksChange() runs after an accept / decline / end so App can refresh
+ * whether the athlete has an active coach (gates workout editing).
  */
-export default function AthleteCoachCard() {
+export default function AthleteCoachCard({ onLinksChange = null }) {
   const [links, setLinks] = useState(null)
   const [unavailable, setUnavailable] = useState(false)
   const [busyId, setBusyId] = useState(null)
@@ -37,6 +39,7 @@ export default function AthleteCoachCard() {
     try {
       await fn()
       await load()
+      onLinksChange?.()
     } catch (err) {
       setError(err.message || 'Something went wrong — try again')
     } finally {

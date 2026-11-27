@@ -82,34 +82,48 @@ export function isExerciseFullyLogged(we, logs, logSplits = []) {
 }
 
 /**
- * Insert a log row. If the logs.weight_unit column doesn't exist yet (the
- * 2026-11 hardening migration hasn't been run), retry without it so logging
- * keeps working.
+ * Run a logs insert/update, dropping optional columns whose migration hasn't
+ * been run yet so logging keeps working:
+ *   weight_unit — 2026-11-hardening.sql
+ *   load_basis  — 2026-11-notes-and-editing.sql
  */
-async function insertLogRow(client, payload) {
-  let res = await client.from('logs').insert(payload).select().single()
-  if (res.error && 'weight_unit' in payload && isMissingWeightUnit(res.error)) {
-    res = await client.from('logs').insert(withoutWeightUnit(payload)).select().single()
+async function withOptionalLogColumns(run, fields) {
+  let current = fields
+  let res = await run(current)
+  for (let i = 0; i < 2 && res.error; i++) {
+    if ('load_basis' in current && isMissingColumn(res.error, 'load_basis')) {
+      current = { ...current }
+      delete current.load_basis
+    } else if ('weight_unit' in current && isMissingColumn(res.error, 'weight_unit')) {
+      current = withoutWeightUnit(current)
+    } else {
+      break
+    }
+    res = await run(current)
   }
   if (res.error) throw res.error
   return res.data
 }
 
+async function insertLogRow(client, payload) {
+  return withOptionalLogColumns(
+    (p) => client.from('logs').insert(p).select().single(),
+    payload,
+  )
+}
+
 async function updateLogRow(client, logId, userId, fields) {
-  const run = (f) =>
-    client
-      .from('logs')
-      .update(f)
-      .eq('id', logId)
-      .eq('user_id', userId)
-      .select()
-      .single()
-  let res = await run(fields)
-  if (res.error && 'weight_unit' in fields && isMissingWeightUnit(res.error)) {
-    res = await run(withoutWeightUnit(fields))
-  }
-  if (res.error) throw res.error
-  return res.data
+  return withOptionalLogColumns(
+    (f) =>
+      client
+        .from('logs')
+        .update(f)
+        .eq('id', logId)
+        .eq('user_id', userId)
+        .select()
+        .single(),
+    fields,
+  )
 }
 
 /**
@@ -125,11 +139,18 @@ function withoutWeightUnit(fields) {
   return rest
 }
 
-function isMissingWeightUnit(error) {
-  return /weight_unit/i.test(
-    `${error?.message ?? ''} ${error?.details ?? ''} ${error?.hint ?? ''}`,
+/** "Could not find the 'x' column … schema cache" / "column "x" … does not exist". */
+function isMissingColumn(error, column) {
+  const text = `${error?.message ?? ''} ${error?.details ?? ''} ${error?.hint ?? ''}`
+  return (
+    new RegExp(column, 'i').test(text) &&
+    (error?.code === 'PGRST204' ||
+      error?.code === '42703' ||
+      /could not find|does not exist|schema cache/i.test(text))
   )
 }
+
+const LOAD_BASES = new Set(['per_dumbbell', 'total', 'barbell', 'bodyweight'])
 
 /** Oldest log row in the DB for this workout_exercise (or null). */
 async function findExistingLogForExercise(client, workoutExerciseId, userId) {
@@ -188,6 +209,7 @@ export async function saveSetLog({
   actualReps,
   actualWeight,
   weightUnit = null,
+  loadBasis = null,
   exercises,
   existingLogs,
   logSplits = [],
@@ -200,6 +222,7 @@ export async function saveSetLog({
     actual_weight: actualWeight,
   }
   if (weightUnit === 'lb' || weightUnit === 'kg') fields.weight_unit = weightUnit
+  if (LOAD_BASES.has(loadBasis)) fields.load_basis = loadBasis
 
   const knownIds = new Set((existingLogs ?? []).map((l) => l.id))
   const { data: sameSet, error: lookupErr } = await client
@@ -238,6 +261,7 @@ export async function updateSetLog({
   actualReps,
   actualWeight,
   weightUnit = null,
+  loadBasis = null,
 }) {
   const client = assertSupabase()
   const userId = await requireAuthUserId()
@@ -247,6 +271,7 @@ export async function updateSetLog({
     actual_weight: actualWeight,
   }
   if (weightUnit === 'lb' || weightUnit === 'kg') fields.weight_unit = weightUnit
+  if (LOAD_BASES.has(loadBasis)) fields.load_basis = loadBasis
   return updateLogRow(client, logId, userId, fields)
 }
 

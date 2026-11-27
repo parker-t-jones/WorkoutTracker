@@ -374,6 +374,7 @@ export default function App() {
     actual_reps,
     actual_weight,
     weight_unit,
+    load_basis,
   }) {
     const scheduled = getScheduledBundle(scheduledId)
     if (!scheduled || !workoutExerciseId) return
@@ -392,6 +393,7 @@ export default function App() {
         actualReps: actual_reps,
         actualWeight: actual_weight,
         weightUnit: weight_unit,
+        loadBasis: load_basis,
         exercises: scheduled.exercises,
         existingLogs: logs,
         logSplits,
@@ -524,6 +526,7 @@ export default function App() {
     actual_reps,
     actual_weight,
     weight_unit,
+    load_basis,
   }) {
     if (!log_id) return
     if (!session?.user?.id) {
@@ -539,6 +542,7 @@ export default function App() {
         actualReps: actual_reps,
         actualWeight: actual_weight,
         weightUnit: weight_unit,
+        loadBasis: load_basis,
       })
       mergeUpdatedLogs([log])
     } catch (err) {

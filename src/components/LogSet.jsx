@@ -4,6 +4,7 @@ import {
   isBodyweightGuidance,
 } from '../lib/logging'
 import { getWeightUnit, roundWeight } from '../lib/units'
+import { dumbbellInfo, parseGuidanceWeight } from '../lib/equipment'
 import { logE1rm, logWeightIn, previousPerformance } from '../lib/progress'
 import {
   DEFAULT_REST_SECONDS,
@@ -63,10 +64,12 @@ function displayWeight(log, unit) {
 }
 
 /**
- * Default weight for the next set: today's latest weighted set, else last
- * session's first weighted set, else 0 for bodyweight, else a barbell guess.
+ * Default weight for the next set (per dumbbell for dumbbell lifts): today's
+ * latest weighted set, else last session's first weighted set, else the
+ * number in the prescription ("~45-50 lb dumbbells per hand" → 45), else 0
+ * for bodyweight, else a barbell guess.
  */
-function defaultWeight(workoutExercise, existingLogs, lastSession, unit) {
+function defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell) {
   const sorted = existingLogs
     .slice()
     .sort((a, b) => b.set_number - a.set_number)
@@ -76,8 +79,39 @@ function defaultWeight(workoutExercise, existingLogs, lastSession, unit) {
   const lastFirst = lastSession?.logs.find((l) => l.actual_weight != null)
   if (lastFirst) return displayWeight(lastFirst, unit)
 
+  const prescribed = parseGuidanceWeight(workoutExercise.weight_guidance, unit, {
+    perHand: isDumbbell,
+  })
+  if (prescribed != null) return prescribed
+
   if (isBodyweightGuidance(workoutExercise.weight_guidance)) return 0
   return unit === 'kg' ? 60 : 135
+}
+
+// Dumbbell lifts: the field can take one dumbbell ("each") or both together
+// ("total"); storage is always per dumbbell. Remembered per device.
+const DUMBBELL_ENTRY_KEY = 'wt-dumbbell-entry'
+
+function readDumbbellEntryMode() {
+  try {
+    return localStorage.getItem(DUMBBELL_ENTRY_KEY) === 'total' ? 'total' : 'each'
+  } catch {
+    return 'each'
+  }
+}
+
+function writeDumbbellEntryMode(mode) {
+  try {
+    localStorage.setItem(DUMBBELL_ENTRY_KEY, mode)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Field text for a per-dumbbell weight in the current entry mode. */
+function entryText(perDumbbell, totalMode) {
+  if (perDumbbell == null) return '0'
+  return String(totalMode ? roundWeight(perDumbbell * 2) : perDumbbell)
 }
 
 function formatShortDate(dateKey) {
@@ -90,7 +124,7 @@ function formatShortDate(dateKey) {
   })
 }
 
-function formatLastSession(lastSession, unit) {
+function formatLastSession(lastSession, unit, each = false) {
   if (!lastSession?.logs.length) return null
   let weighted = false
   const sets = lastSession.logs.map((l) => {
@@ -103,7 +137,8 @@ function formatLastSession(lastSession, unit) {
     return `BW×${reps}`
   })
   const date = formatShortDate(lastSession.date)
-  return `Last: ${sets.join(', ')}${weighted ? ` ${unit}` : ''}${date ? ` · ${date}` : ''}`
+  const suffix = weighted ? ` ${unit}${each ? ' each' : ''}` : ''
+  return `Last: ${sets.join(', ')}${suffix}${date ? ` · ${date}` : ''}`
 }
 
 function formatClock(totalSeconds) {
@@ -289,6 +324,37 @@ function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
   )
 }
 
+function DumbbellModeToggle({ mode, onChange }) {
+  return (
+    <div
+      role="group"
+      aria-label="Enter weight per dumbbell or total"
+      className="flex shrink-0 rounded bg-surface-alt p-0.5 ring-1 ring-orange-dim/40"
+    >
+      {[
+        ['each', 'Each'],
+        ['total', 'Total'],
+      ].map(([value, label]) => {
+        const selected = mode === value
+        return (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onChange(value)}
+            aria-pressed={selected}
+            className={[
+              'min-h-11 min-w-14 rounded px-3 text-sm font-medium',
+              selected ? 'bg-orange text-on-orange' : 'text-muted hover:text-ink',
+            ].join(' ')}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function SetForm({
   title,
   reps,
@@ -302,7 +368,13 @@ function SetForm({
   onCancel,
   onDelete,
   unit = 'lb',
+  // { mode: 'each'|'total', single, onModeChange, perDumbbellText } for
+  // dumbbell lifts; null otherwise.
+  dumbbell = null,
 }) {
+  const totalMode = dumbbell && !dumbbell.single && dumbbell.mode === 'total'
+  const pair = dumbbell && !dumbbell.single
+  const suffix = pair ? `${unit} ${totalMode ? 'total' : 'each'}` : unit
   return (
     <div className="space-y-6">
       {title ? (
@@ -312,9 +384,20 @@ function SetForm({
       <Stepper label="Reps" value={reps} onChange={setReps} step={1} min={0} />
 
       <div>
-        <label htmlFor="log-weight" className="mb-2 block text-sm font-medium">
-          Weight
-        </label>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label htmlFor="log-weight" className="block text-sm font-medium">
+            {pair
+              ? totalMode
+                ? 'Total weight'
+                : 'Weight per dumbbell'
+              : dumbbell
+                ? 'Dumbbell weight'
+                : 'Weight'}
+          </label>
+          {pair ? (
+            <DumbbellModeToggle mode={dumbbell.mode} onChange={dumbbell.onModeChange} />
+          ) : null}
+        </div>
         <div className="relative">
           <input
             id="log-weight"
@@ -325,13 +408,28 @@ function SetForm({
             value={weightText}
             onChange={(e) => setWeightText(sanitizeWeightInput(e.target.value))}
             onFocus={(e) => e.target.select()}
-            className="h-14 w-full rounded border border-orange-dim/50 bg-surface px-4 pr-12 text-center font-display text-3xl font-semibold tabular-nums text-ink focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
-            aria-label={unit === 'kg' ? 'Weight in kilograms' : 'Weight in pounds'}
+            className={[
+              'h-14 w-full rounded border border-orange-dim/50 bg-surface px-4 text-center font-display text-3xl font-semibold tabular-nums text-ink focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange',
+              pair ? 'pl-24 pr-24' : 'pr-12',
+            ].join(' ')}
+            aria-label={`${
+              dumbbell ? (totalMode ? 'Total weight of both dumbbells' : 'Weight of one dumbbell') : 'Weight'
+            } in ${unit === 'kg' ? 'kilograms' : 'pounds'}`}
+            aria-describedby={dumbbell ? 'log-weight-help' : undefined}
           />
           <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-lg text-muted">
-            {unit}
+            {suffix}
           </span>
         </div>
+        {dumbbell ? (
+          <p id="log-weight-help" className="mt-2 text-xs text-muted">
+            {totalMode
+              ? `Both dumbbells together — saved as ${dumbbell.perDumbbellText} ${unit} each`
+              : dumbbell.single
+                ? 'Logging the weight of the dumbbell'
+                : 'Logging the weight of one dumbbell'}
+          </p>
+        ) : null}
       </div>
 
       {error ? (
@@ -396,6 +494,13 @@ export default function LogSet({
   const [unit] = useState(() => getWeightUnit())
   const rest = useRestTimer()
   const [prBadge, setPrBadge] = useState(null)
+  const dumbbell = useMemo(() => dumbbellInfo(workoutExercise), [workoutExercise])
+  const isDumbbell = dumbbell.isDumbbell
+  const [dumbbellMode, setDumbbellMode] = useState(() => readDumbbellEntryMode())
+  // Entering the total of both dumbbells (divided by 2 on save).
+  const totalMode = isDumbbell && !dumbbell.single && dumbbellMode === 'total'
+  // "45×8 lb each" — omitted for single-dumbbell lifts (goblet squat).
+  const eachLabel = isDumbbell && !dumbbell.single ? ' each' : ''
 
   const lastSession = useMemo(
     () =>
@@ -410,7 +515,7 @@ export default function LogSet({
         : null,
     [weIndex, workoutExercise, scheduledDate, exerciseHistory],
   )
-  const lastSessionLabel = formatLastSession(lastSession, unit)
+  const lastSessionLabel = formatLastSession(lastSession, unit, Boolean(eachLabel))
   const restSeconds =
     parseRestSeconds(workoutExercise.weight_guidance, workoutExercise.notes) ??
     DEFAULT_REST_SECONDS
@@ -426,7 +531,10 @@ export default function LogSet({
   const [reps, setReps] = useState(prescribedReps)
   // String so the user can clear/type mid-edit (e.g. "12.") without fighting a number.
   const [weightText, setWeightText] = useState(() =>
-    String(defaultWeight(workoutExercise, existingLogs, lastSession, unit)),
+    entryText(
+      defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell),
+      totalMode,
+    ),
   )
   const [rpe, setRpe] = useState(existingRpe)
   // After first completion prompt is dismissed, keep a compact "edit RPE" affordance.
@@ -466,7 +574,7 @@ export default function LogSet({
         if (e != null && (best == null || e > best)) best = e
       }
       if (best != null && priorBest != null && best > priorBest + 0.05) {
-        setPrBadge(`New PR · est. 1RM ${roundWeight(best)} ${unit}`)
+        setPrBadge(`New PR · est. 1RM ${roundWeight(best)} ${unit}${eachLabel}`)
       }
       if (!done) rest.start(restSeconds)
     }
@@ -474,7 +582,10 @@ export default function LogSet({
     if (done || editingLogId) return
     setReps(prescribedReps)
     setWeightText(
-      String(defaultWeight(workoutExercise, existingLogs, lastSession, unit)),
+      entryText(
+        defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell),
+        totalMode,
+      ),
     )
     if (loggedCount >= workoutExercise.sets && existingRpe == null) {
       setRpePromptOpen(true)
@@ -492,6 +603,9 @@ export default function LogSet({
     existingRpe,
     rest,
     restSeconds,
+    isDumbbell,
+    totalMode,
+    eachLabel,
   ])
 
   useEffect(() => {
@@ -504,37 +618,65 @@ export default function LogSet({
     setRpe(existingRpe)
   }, [existingRpe])
 
-  // Load values when entering edit mode for a specific set.
+  // Load values when entering edit mode for a specific set. Only when the
+  // edited set changes — not when the Each/Total toggle flips (that converts
+  // the typed value itself).
+  const editingLogRef = useRef(null)
   useEffect(() => {
-    if (!editingLog) return
+    if (!editingLog || editingLogRef.current === editingLog) return
+    editingLogRef.current = editingLog
     setReps(Number(editingLog.actual_reps) || 0)
-    setWeightText(String(displayWeight(editingLog, unit) ?? 0))
-  }, [editingLog, unit])
+    setWeightText(entryText(displayWeight(editingLog, unit), totalMode))
+  }, [editingLog, unit, totalMode])
 
   function startEdit(log) {
     setEditingLogId(log.id)
     setRpePromptOpen(false)
     setReps(Number(log.actual_reps) || 0)
-    setWeightText(String(displayWeight(log, unit) ?? 0))
+    setWeightText(entryText(displayWeight(log, unit), totalMode))
   }
 
   function cancelEdit() {
     setEditingLogId(null)
+    editingLogRef.current = null
     if (!done) {
       setReps(prescribedReps)
       setWeightText(
-        String(defaultWeight(workoutExercise, existingLogs, lastSession, unit)),
+        entryText(
+          defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell),
+          totalMode,
+        ),
       )
     }
   }
+
+  function changeDumbbellMode(next) {
+    if (next === dumbbellMode) return
+    // Keep the same physical load: 45 each ⇄ 90 total.
+    const n = parseWeight(weightText)
+    setWeightText(
+      String(roundWeight(next === 'total' ? n * 2 : n / 2)),
+    )
+    setDumbbellMode(next)
+    writeDumbbellEntryMode(next)
+  }
+
+  /** Weight to store: always one dumbbell for dumbbell lifts. */
+  function storedWeight() {
+    const n = parseWeight(weightText)
+    return totalMode ? n / 2 : n
+  }
+
+  const loadBasis = isDumbbell ? 'per_dumbbell' : null
 
   async function handleSave() {
     if (done || saving || editingLog) return
     await onSave({
       set_number: nextSet,
       actual_reps: reps,
-      actual_weight: parseWeight(weightText),
+      actual_weight: storedWeight(),
       weight_unit: unit,
+      load_basis: loadBasis,
     })
   }
 
@@ -544,8 +686,9 @@ export default function LogSet({
       await onUpdate({
         log_id: editingLog.id,
         actual_reps: reps,
-        actual_weight: parseWeight(weightText),
+        actual_weight: storedWeight(),
         weight_unit: unit,
+        load_basis: loadBasis,
       })
       setEditingLogId(null)
     } catch {
@@ -604,6 +747,15 @@ export default function LogSet({
   const sortedLogs = existingLogs
     .slice()
     .sort((a, b) => a.set_number - b.set_number)
+
+  const dumbbellProp = isDumbbell
+    ? {
+        mode: dumbbellMode,
+        single: dumbbell.single,
+        onModeChange: changeDumbbellMode,
+        perDumbbellText: String(roundWeight(storedWeight())),
+      }
+    : null
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
@@ -670,7 +822,7 @@ export default function LogSet({
                 <span className="font-mono tabular-nums text-ink">
                   {l.actual_reps} reps
                   {l.actual_weight != null
-                    ? ` x ${displayWeight(l, unit)} ${unit}`
+                    ? ` x ${displayWeight(l, unit)} ${unit}${eachLabel}`
                     : ''}
                   <span className="ml-2 font-sans text-xs text-muted">Edit</span>
                 </span>
@@ -694,6 +846,7 @@ export default function LogSet({
           onCancel={cancelEdit}
           onDelete={onDelete ? handleDelete : undefined}
           unit={unit}
+          dumbbell={dumbbellProp}
         />
       ) : done ? (
         <div className="space-y-3">
@@ -750,6 +903,7 @@ export default function LogSet({
           primaryLabel={`Log set ${nextSet}`}
           onPrimary={handleSave}
           unit={unit}
+          dumbbell={dumbbellProp}
         />
       )}
     </div>

@@ -17,6 +17,7 @@ import {
 import { logWeightIn } from '../../lib/progress'
 import { useExerciseMedia } from '../../lib/useExerciseMedia'
 import { notesByWorkoutExercise } from '../../lib/notes'
+import { dumbbellInfo } from '../../lib/equipment'
 import DemoMediaManager from './DemoMediaManager'
 
 function prescription(we) {
@@ -150,6 +151,8 @@ export default function CoachWorkoutView({
           const noteText =
             noteRow?.note ?? (logPain ? exercisePainNote(logs, we.id) : null)
           const notePain = Boolean(noteRow?.is_pain) || logPain
+          const db = dumbbellInfo(we)
+          const each = db.isDumbbell && !db.single ? ' each' : ''
 
           return (
             <li key={we.id} className="rounded border border-orange-dim/40 bg-surface px-3 py-3">
@@ -176,7 +179,7 @@ export default function CoachWorkoutView({
                           className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
                         >
                           #{l.set_number}: {l.actual_reps}
-                          {w != null ? ` × ${roundWeight(w)} ${weightUnit}` : ''}
+                          {w != null ? ` × ${roundWeight(w)} ${weightUnit}${each}` : ''}
                         </span>
                       )
                     })}

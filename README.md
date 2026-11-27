@@ -32,11 +32,14 @@ All SQL is applied by hand in the Supabase **SQL editor**. Run in this order
 | 11 | `supabase/coach_mode.sql` | Coach/athlete links, coach RLS, custom exercises, templates |
 | 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups + streak fix, `ensure_shared_exercise`, `logs.weight_unit`, coach demo media table + `exercise-media` storage bucket) |
 | 13 | `supabase/2026-11-notes-and-editing.sql` | Athlete notes per exercise (`exercise_notes`, readable by an active coach; `is_pain` feeds adaptation like `logs.pain_flag`) `logs.load_basis` (dumbbell sets store the weight of one dumbbell), and athlete workout editing (`workouts.created_by`, `workout_exercises.sort_order` / `athlete_edits`, a trigger that stops athletes changing coach-built workouts or deleting/swapping logged exercises) |
+| 14 | `supabase/2026-11-account-deletion.sql` | Account deletion: every FK to a user gets the right `ON DELETE` (cascade personal data; `SET NULL` for `exercises.owner_id`, `workouts.created_by`, `leaderboard_groups.created_by`) plus cleanup of unused custom exercises and empty leaderboard groups — see **Account deletion & App Store** |
 
-**Always run `2026-11-hardening.sql` and then `2026-11-notes-and-editing.sql`
-last.** If you ever re-run an older file (especially `auth.sql`,
+**Always run `2026-11-hardening.sql`, then `2026-11-notes-and-editing.sql`,
+then `2026-11-account-deletion.sql` last.** If you ran an earlier copy of
+`2026-11-notes-and-editing.sql`, re-run it (it now lets a deleted coach's
+`workouts.created_by` become NULL). If you ever re-run an older file (especially `auth.sql`,
 `coach_mode.sql`, `exercises-substitutions.sql`, `proposed-substitutions.sql`
-or `leaderboard.sql`), re-run `2026-11-hardening.sql` afterwards — the older
+or `leaderboard.sql`), re-run `2026-11-hardening.sql` and the two files after it afterwards — the older
 files recreate looser policies and the old (unscoped) leaderboard function.
 Until `2026-11-notes-and-editing.sql` is run the app still works: notes can
 only be saved as pain notes on already-logged sets (the old "felt off"), and

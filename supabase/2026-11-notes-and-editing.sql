@@ -182,7 +182,9 @@ update public.workouts set created_by = user_id where created_by is null;
 -- created_by cannot be forged or changed through the API (an athlete could
 -- otherwise claim a coach-built workout and bypass 3c). The SQL editor
 -- (auth.role() NULL) and the service key may set it; they fall back to the
--- owner when they leave it empty.
+-- owner when they leave it empty. When the creator's account is deleted,
+-- ON DELETE SET NULL clears it (the workout becomes athlete-owned); that is
+-- let through because the old creator no longer exists.
 create or replace function public.workouts_guard_created_by()
 returns trigger
 language plpgsql
@@ -192,6 +194,9 @@ begin
   if coalesce(auth.role(), '') in ('authenticated', 'anon') then
     if tg_op = 'INSERT' then
       new.created_by := auth.uid();
+    elsif new.created_by is null and old.created_by is not null
+          and not exists (select 1 from public.users u where u.id = old.created_by) then
+      null; -- creator deleted: keep the SET NULL
     else
       new.created_by := old.created_by;
     end if;

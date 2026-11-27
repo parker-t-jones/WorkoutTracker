@@ -9,12 +9,17 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "jsr:@supabase/supabase-js@2"
+import { repairProgram, type RulesCatalogEntry } from "./sessionRules.ts"
 
 const DEFAULT_MODEL = "claude-sonnet-5"
 const MAX_BODY_BYTES = 200_000
 const MAX_CATALOG_ENTRIES = 400
 const MAX_SPLITS = 30
 const ANTHROPIC_TIMEOUT_MS = 110_000
+// Wall-clock budget for the whole request (Supabase kills functions at ~150 s
+// on the free tier). The one rule-violation retry only runs if it fits.
+const REQUEST_BUDGET_MS = 140_000
+const MIN_RETRY_MS = 30_000
 
 const EXERCISE_SCHEMA = `{
               "name": "string — MUST match an exercise library name exactly",
@@ -29,6 +34,15 @@ const EXERCISE_SCHEMA = `{
               "is_interval": "boolean — true only for typically_interval cardio library exercises",
               "target_splits": "array|null — REQUIRED when is_interval true. Each item MUST be an object: { \\"split_number\\": number, \\"distance\\"?: number, \\"duration_seconds\\"?: number, \\"unit\\"?: \\"mi\\"|\\"km\\", \\"target_pace\\"?: \\"m:ss\\", \\"label\\"?: \\"work\\"|\\"recovery\\" }. Include recovery bouts as separate splits. Do NOT put split summaries in reps. null when not interval"
             }`
+
+const SESSION_DESIGN_RULES = `Session design (how a strength coach builds each day; cardio rules above still apply):
+- Order within a session: 1) warm-up (e.g. Cardio Warm-up) 2) power/plyometric/Olympic work, only if appropriate 3) main compound lift(s) 4) secondary compound 5) accessories/isolation 6) core 7) conditioning/finisher. On a run/ride-led day the key cardio session comes right after the warm-up and any strength follows it.
+- Power work (jumps, box/broad jumps, bounds, hops, med-ball throws/slams, cleans, snatches, jerks) needs a fresh nervous system: NEVER after heavy or fatiguing work. Low volume: 2–4 sets of ≤5 reps, full rest. Leave it out for beginners, hypertrophy goals, and anyone with knee/ankle/hip/back/shoulder/wrist pain or limitations unless clearly suitable.
+- Pattern budget per session: at most 2 exercises of the same primary pattern (squat, hinge, lunge/single-leg, horizontal push, vertical push, horizontal pull, vertical pull, core, carry). Never 3 variations of one lift (Back Squat + Front Squat + Goblet Squat is wrong). One heavy main lift per pattern; a second same-pattern exercise is lighter secondary or accessory work.
+- Never put two same-pattern exercises back-to-back unless they are an intentional superset/contrast pair, labelled in notes (e.g. "Contrast pair with Back Squat"). Interleave accessories: push/pull, lower/upper, knee-dominant/hip-dominant.
+- Weekly balance: across the week cover squat, hinge, lunge/single-leg, horizontal push and pull, vertical push and pull, and core/carry, sensibly for days_per_week and goal (2–3 days: full-body days each with a lower and an upper push + pull; 4+ days: upper/lower or similar splits). Don't load the same heavy pattern (heavy squats, heavy hinges, heavy pressing) on consecutive days. Pulling volume ≥ pushing volume.
+- Volume per session (strength exercises, excluding warm-up and cardio; total working sets): 30 min → 3–4 exercises, ≤12 sets; 45 min → 4–5, ≤16; 60 min → 5–6, ≤20; 90+ min → 6–8, ≤26. Unspecified → plan for 45–60 min. Cardio-led days scale strength work down accordingly.
+- Pain flags, limitations, athlete notes and athlete edits override these defaults.`
 
 const INITIAL_SYSTEM_PROMPT = `You are a certified strength and endurance coach generating a structured training program.
 
@@ -52,6 +66,8 @@ Rules:
 - Fit the session to the stated session length.
 - Use age and bodyweight when writing weight_guidance for loaded lifts.
 - Each training day should target different or complementary patterns than the day before when possible.
+
+${SESSION_DESIGN_RULES}
 
 Output must match this exact JSON schema:
 {
@@ -93,6 +109,9 @@ Rules:
 - Honor Additional context, session length, age/bodyweight, and distance_unit.
 - Prefer exercise names from the provided library when possible (exact spelling).
 - Cardio fields stay structured: never put distance/duration/pace/split counts in reps or weight_guidance. Interval rows require target_splits objects. Interval/Tempo days must start with "Cardio Warm-up" as its own exercise.
+- Keep the prior structure, but if a prior-week session broke the Session design rules below (exercise order, pattern budget, plyometrics late in the session), fix it rather than copying the mistake.
+
+${SESSION_DESIGN_RULES}
 
 Output must match this exact JSON schema:
 {
@@ -144,6 +163,9 @@ type CatalogEntry = {
   name: string
   modality?: string
   typically_interval?: boolean
+  movement_pattern?: string | null
+  equipment_required?: string | null
+  contraindication_tags?: string[] | null
 }
 
 function normName(name: string): string {
@@ -732,7 +754,7 @@ Session length: ${session}`
 
 function buildLibraryBlock(body: Record<string, unknown>): string {
   if (Array.isArray(body.exercise_catalog) && body.exercise_catalog.length > 0) {
-    return `Exercise library (use these names only; modality/typically_interval/equipment_required included):
+    return `Exercise library (use these names only; modality/typically_interval/equipment_required/movement_pattern/contraindication_tags included):
 ${JSON.stringify(body.exercise_catalog)}`
   }
   if (Array.isArray(body.exercise_names) && body.exercise_names.length > 0) {
@@ -892,6 +914,7 @@ async function callAnthropic(
   system: string,
   userPrompt: string,
   maxTokens = 2000,
+  timeoutMs = ANTHROPIC_TIMEOUT_MS,
 ): Promise<AnthropicResult> {
   const model = Deno.env.get("ANTHROPIC_MODEL")?.trim() || DEFAULT_MODEL
 
@@ -910,12 +933,12 @@ async function callAnthropic(
         system,
         messages: [{ role: "user", content: userPrompt }],
       }),
-      signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
     const name = (err as { name?: string })?.name
     if (name === "TimeoutError" || name === "AbortError") {
-      console.error("Anthropic request timed out after", ANTHROPIC_TIMEOUT_MS, "ms")
+      console.error("Anthropic request timed out after", timeoutMs, "ms")
       return {
         error: "The AI took too long to respond. Please try again.",
         status: 504,
@@ -1016,7 +1039,94 @@ function capCatalogs(body: Record<string, unknown>) {
   }
 }
 
+type GeneratedWeek =
+  | { program: Record<string, unknown>; valid: boolean }
+  | { error: string; status: number }
+
+/** One model call → week-number fix-up → catalog/cardio normalization → validation. */
+async function generateWeek(
+  apiKey: string,
+  system: string,
+  userPrompt: string,
+  body: Record<string, unknown>,
+  mode: "initial" | "adaptive",
+  catalog: CatalogEntry[],
+  distanceUnit: string,
+  timeoutMs = ANTHROPIC_TIMEOUT_MS,
+): Promise<GeneratedWeek> {
+  const result = await callAnthropic(apiKey, system, userPrompt, 8000, timeoutMs)
+  if (result.error) {
+    return { error: result.error, status: result.status ?? 502 }
+  }
+
+  const program = result.data as {
+    weeks?: Array<Record<string, unknown>>
+    duration_weeks?: number
+  } | null
+
+  // Normalize week_number for adaptive if model drifts slightly.
+  if (
+    mode === "adaptive" &&
+    program?.weeks?.[0] &&
+    typeof body.next_week_number === "number"
+  ) {
+    program.weeks[0].week_number = body.next_week_number
+    program.duration_weeks = 1
+  }
+  if (mode === "initial" && program?.weeks?.[0]) {
+    program.weeks[0].week_number = 1
+    program.duration_weeks = 1
+  }
+
+  if (program && typeof program === "object") {
+    normalizeProgramCardio(
+      program as Record<string, unknown>,
+      catalog,
+      distanceUnit,
+    )
+  }
+
+  const valid = validateProgram(program, {
+    expectSingleWeek: true,
+    expectedWeekNumber:
+      mode === "adaptive" ? Number(body.next_week_number) : 1,
+  })
+  if (!valid) {
+    console.error("Program failed validation:", JSON.stringify(program).slice(0, 500))
+  }
+  return { program: (program ?? {}) as Record<string, unknown>, valid }
+}
+
+/** Session-rule repair; keeps the model's version if a repair would fail validation. */
+function applySessionRules(
+  program: Record<string, unknown>,
+  catalog: CatalogEntry[],
+  body: Record<string, unknown>,
+  mode: "initial" | "adaptive",
+) {
+  const repaired = repairProgram(program, catalog as RulesCatalogEntry[], {
+    experience_level: body.experience_level,
+    goal: body.goal,
+    equipment: body.equipment,
+    limitations: body.limitations,
+    additional_notes: body.additional_notes,
+    exercise_performance: body.exercise_performance,
+    prior_week_program: body.prior_week_program,
+  })
+  const stillValid = validateProgram(repaired.program, {
+    expectSingleWeek: true,
+    expectedWeekNumber:
+      mode === "adaptive" ? Number(body.next_week_number) : 1,
+  })
+  if (!stillValid) {
+    console.error("Session-rule repair produced an invalid program; keeping model output")
+    return { program, fixes: [] as string[], shortfalls: [] as string[] }
+  }
+  return repaired
+}
+
 Deno.serve(async (req) => {
+  const startedAt = Date.now()
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders })
   }
@@ -1140,30 +1250,6 @@ Deno.serve(async (req) => {
         ? buildAdaptiveUserPrompt(body)
         : buildInitialUserPrompt(body)
 
-    const result = await callAnthropic(apiKey, system, userPrompt, 8000)
-    if (result.error) {
-      return jsonResponse({ error: result.error }, result.status ?? 502)
-    }
-
-    const program = result.data as {
-      weeks?: Array<Record<string, unknown>>
-      duration_weeks?: number
-    } | null
-
-    // Normalize week_number for adaptive if model drifts slightly.
-    if (
-      mode === "adaptive" &&
-      program?.weeks?.[0] &&
-      typeof body.next_week_number === "number"
-    ) {
-      program.weeks[0].week_number = body.next_week_number
-      program.duration_weeks = 1
-    }
-    if (mode === "initial" && program?.weeks?.[0]) {
-      program.weeks[0].week_number = 1
-      program.duration_weeks = 1
-    }
-
     const distanceUnit =
       body.distance_unit === "km" || body.distance_unit === "mi"
         ? body.distance_unit
@@ -1173,29 +1259,73 @@ Deno.serve(async (req) => {
           (e) => e && typeof e.name === "string",
         )
       : []
-    if (program && typeof program === "object") {
-      normalizeProgramCardio(
-        program as Record<string, unknown>,
-        catalog,
-        distanceUnit,
-      )
+
+    const first = await generateWeek(
+      apiKey,
+      system,
+      userPrompt,
+      body,
+      mode,
+      catalog,
+      distanceUnit,
+    )
+    if ("error" in first) {
+      return jsonResponse({ error: first.error }, first.status)
     }
-
-    const valid = validateProgram(program, {
-      expectSingleWeek: true,
-      expectedWeekNumber:
-        mode === "adaptive" ? Number(body.next_week_number) : 1,
-    })
-
-    if (!valid) {
-      console.error("Program failed validation:", JSON.stringify(program).slice(0, 500))
+    if (!first.valid) {
       return jsonResponse(
         { error: "couldn't generate program, try again" },
         502,
       )
     }
 
-    return jsonResponse({ program })
+    let repaired = applySessionRules(first.program, catalog, body, mode)
+
+    // A repair that leaves a strength day too thin gets ONE retry with the
+    // violations as feedback; otherwise (or if the retry fails) keep the
+    // repaired first answer.
+    const remainingMs = REQUEST_BUDGET_MS - (Date.now() - startedAt)
+    if (repaired.shortfalls.length > 0 && remainingMs >= MIN_RETRY_MS) {
+      const feedback = `
+
+Your previous answer broke the session-design rules. Problems found:
+${[...repaired.fixes, ...repaired.shortfalls].map((f) => `- ${f}`).join("\n")}
+Regenerate the whole week following the Session design rules: power work first or not at all, at most 2 exercises per movement pattern, and at least 3 strength exercises on strength days using different patterns instead of more variations of the same lift.`
+      const second = await generateWeek(
+        apiKey,
+        system,
+        userPrompt + feedback,
+        body,
+        mode,
+        catalog,
+        distanceUnit,
+        Math.min(ANTHROPIC_TIMEOUT_MS, remainingMs),
+      )
+      if (!("error" in second) && second.valid) {
+        const retried = applySessionRules(second.program, catalog, body, mode)
+        if (retried.shortfalls.length <= repaired.shortfalls.length) {
+          repaired = {
+            ...retried,
+            fixes: [
+              `Retried once after: ${repaired.shortfalls.join("; ")}`,
+              ...retried.fixes,
+            ],
+          }
+        }
+      } else {
+        console.warn("Session-rule retry failed; using repaired first answer")
+      }
+    }
+
+    if (repaired.fixes.length || repaired.shortfalls.length) {
+      console.log("rule_fixes:", JSON.stringify([...repaired.fixes, ...repaired.shortfalls]))
+    }
+
+    return jsonResponse({
+      program: repaired.program,
+      // Debug only: what the session-rule guard changed. Clients ignore it.
+      rule_fixes: [...repaired.fixes, ...repaired.shortfalls],
+    })
   } catch (err) {
     console.error("generate-program failed:", err)
     return jsonResponse(

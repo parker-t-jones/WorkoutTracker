@@ -532,6 +532,8 @@ export async function generateAndSaveProgram(formAnswers, userId) {
       typically_interval: Boolean(e.typically_interval),
       equipment_required: e.equipment_required ?? null,
       movement_pattern: e.movement_pattern,
+      // Session-rule guard (sessionRules.ts) skips knee/back/… straining swaps.
+      contraindication_tags: e.contraindication_tags ?? [],
     })),
     exercise_names: catalog.map((e) => e.name),
   })
@@ -722,6 +724,8 @@ export async function generateAndSaveNextWeek({
       typically_interval: Boolean(e.typically_interval),
       equipment_required: e.equipment_required ?? null,
       movement_pattern: e.movement_pattern,
+      // Session-rule guard (sessionRules.ts) skips knee/back/… straining swaps.
+      contraindication_tags: e.contraindication_tags ?? [],
     })),
     exercise_names: catalog.map((e) => e.name),
     next_week_number: nextWeek,

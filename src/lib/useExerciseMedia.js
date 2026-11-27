@@ -10,7 +10,13 @@ import { loadMediaForWorkoutExercises } from './media'
  */
 export function useExerciseMedia(workoutExercises, { coachId = null, enabled = true } = {}) {
   const list = enabled ? (workoutExercises ?? []) : []
-  const key = list.map((we) => `${we.id}:${we.exercise_id ?? ''}`).join(',')
+  // Sorted so reordering a workout doesn't refetch; unsaved rows
+  // (temp- ids from the workout editor) are skipped.
+  const key = list
+    .filter((we) => !String(we.id).startsWith('temp-'))
+    .map((we) => `${we.id}:${we.exercise_id ?? ''}`)
+    .sort()
+    .join(',')
   const [state, setState] = useState({ key: '', media: {}, loading: false })
   const [reloadTick, setReloadTick] = useState(0)
 

@@ -1,4 +1,5 @@
 import { countLoggedWorkSplits, workSplitNumbers } from './intervals'
+import { athleteEditSummary } from './workoutEditing'
 
 /**
  * @typedef {'substitute' | 'skip' | 'progress' | 'hold' | 'reduce_volume'} AdaptDecision
@@ -564,6 +565,7 @@ export function buildPriorWeekAdaptation({
           pain_flagged: false,
           pain_note: null,
           athlete_notes: [],
+          athlete_edits: [],
           sample_reps: we.reps,
           sample_weight_guidance: we.weight_guidance,
           sample_sets: prescribedSets,
@@ -596,6 +598,13 @@ export function buildPriorWeekAdaptation({
       if (noteText) {
         agg.athlete_notes.push({ note: noteText, is_pain: noteIsPain })
       }
+      // AI-trainer athletes can swap / add exercises and change set counts
+      // (workout_exercises.athlete_edits). Completion above is already
+      // measured against the edited sets; this tells the model why.
+      const editText = athleteEditSummary(we)
+      if (editText && !agg.athlete_edits.includes(editText)) {
+        agg.athlete_edits.push(editText)
+      }
 
       dayExercises.push({
         name,
@@ -611,6 +620,7 @@ export function buildPriorWeekAdaptation({
         target_splits: we.target_splits ?? null,
         athlete_note: noteText,
         athlete_note_is_pain: noteIsPain,
+        athlete_edit: editText,
       })
     }
 
@@ -679,6 +689,8 @@ export function buildPriorWeekAdaptation({
       pain_note: agg.pain_note,
       // Free-form athlete feedback for the model ([] when none).
       athlete_notes: agg.athlete_notes,
+      // Athlete's own edits to the prescription ([] when none).
+      athlete_edits: agg.athlete_edits,
       decision,
       reason,
       prior_sets: agg.sample_sets,

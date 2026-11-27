@@ -23,6 +23,7 @@ import {
   resolvePainSubstitutions,
 } from './adapt'
 import { fetchExerciseNotes } from './notes'
+import { sortWorkoutExercises } from './workoutEditing'
 
 const GENERATE_ERROR = "couldn't generate program, try again"
 
@@ -82,9 +83,11 @@ export async function fetchUserLogSplits(userId) {
 }
 
 /**
- * workout_exercises has no order column; the UI shows exercises in the order
- * the rows come back (insertion order), so these queries must NOT add an
- * ORDER BY and therefore cannot be paged with .range(). Instead query in
+ * workout_exercises.sort_order (2026-11-notes-and-editing.sql) gives the
+ * display order; before that migration the UI shows exercises in the order
+ * the rows come back (insertion order). So these queries must NOT add an
+ * ORDER BY (sortWorkoutExercises falls back to fetch order) and therefore
+ * cannot be paged with .range(). Instead query in
  * small chunks of workout ids (short URLs, far below max_rows) and split a
  * chunk in half if it ever comes back full.
  */
@@ -199,7 +202,7 @@ export async function loadProgramData(userId) {
   for (const w of workouts) {
     workoutDetails[w.id] = {
       workout: w,
-      exercises: exercisesByWorkout.get(w.id) ?? [],
+      exercises: sortWorkoutExercises(exercisesByWorkout.get(w.id) ?? []),
     }
   }
 

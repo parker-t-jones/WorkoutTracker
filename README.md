@@ -31,7 +31,7 @@ All SQL is applied by hand in the Supabase **SQL editor**. Run in this order
 | 10 | `supabase/leaderboard.sql` | `family_leaderboard` RPC |
 | 11 | `supabase/coach_mode.sql` | Coach/athlete links, coach RLS, custom exercises, templates |
 | 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups + streak fix, `ensure_shared_exercise`, `logs.weight_unit`, coach demo media table + `exercise-media` storage bucket) |
-| 13 | `supabase/2026-11-notes-and-editing.sql` | Athlete notes per exercise (`exercise_notes`, readable by an active coach; `is_pain` feeds adaptation like `logs.pain_flag`) and `logs.load_basis` (dumbbell sets store the weight of one dumbbell) |
+| 13 | `supabase/2026-11-notes-and-editing.sql` | Athlete notes per exercise (`exercise_notes`, readable by an active coach; `is_pain` feeds adaptation like `logs.pain_flag`) `logs.load_basis` (dumbbell sets store the weight of one dumbbell), and athlete workout editing (`workouts.created_by`, `workout_exercises.sort_order` / `athlete_edits`, a trigger that stops athletes changing coach-built workouts or deleting/swapping logged exercises) |
 
 **Always run `2026-11-hardening.sql` and then `2026-11-notes-and-editing.sql`
 last.** If you ever re-run an older file (especially `auth.sql`,
@@ -40,8 +40,11 @@ or `leaderboard.sql`), re-run `2026-11-hardening.sql` afterwards — the older
 files recreate looser policies and the old (unscoped) leaderboard function.
 Until `2026-11-notes-and-editing.sql` is run the app still works: notes can
 only be saved as pain notes on already-logged sets (the old "felt off"), and
-sets are saved without `load_basis`. Redeploy `generate-program` after pulling
-so the model is told what athlete notes are.
+sets are saved without `load_basis`. AI-trainer athletes can still edit
+workouts, but without reordering, without the "athlete edited this" context
+for next week, and without the server-side coach-workout guard (the app
+already hides editing from coached athletes). Redeploy `generate-program`
+after pulling so the model is told what athlete notes and edits are.
 
 The first run of `2026-11-hardening.sql` creates a **Family** leaderboard
 group containing every existing user, so the leaderboard looks the same as

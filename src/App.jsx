@@ -35,6 +35,11 @@ import {
   updateExercisePain,
   isCardioExercise,
 } from './lib/logging'
+import {
+  saveExerciseNote,
+  deleteExerciseNote,
+  isMissingNotesTable,
+} from './lib/notes'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
 import { workoutExerciseIndex } from './lib/progress'
 import { buildScheduledProgress } from './lib/schedule'
@@ -63,6 +68,10 @@ export default function App() {
   const [isCoach, setIsCoach] = useState(false)
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
+  // exercise_notes rows; notesAvailable = false until
+  // 2026-11-notes-and-editing.sql is run (then notes fall back to logs.pain_*).
+  const [exerciseNotes, setExerciseNotes] = useState([])
+  const [notesAvailable, setNotesAvailable] = useState(true)
 
   const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | coach | workout | log | week-summary | proposals
   // Where "back" from a workout goes (it can be opened from the history list).
@@ -78,7 +87,7 @@ export default function App() {
   const [logShowRpe, setLogShowRpe] = useState(false)
   const [savingLog, setSavingLog] = useState(false)
   const [savingRpe, setSavingRpe] = useState(false)
-  const [savingPainId, setSavingPainId] = useState(null)
+  const [savingNoteId, setSavingNoteId] = useState(null)
   const [logError, setLogError] = useState(null)
   const [justCompleted, setJustCompleted] = useState(false)
   const [finishingWorkout, setFinishingWorkout] = useState(false)
@@ -97,6 +106,8 @@ export default function App() {
     setWorkoutDetails(data.workoutDetails)
     setLogs(data.logs ?? [])
     setLogSplits(data.logSplits ?? [])
+    setExerciseNotes(data.exerciseNotes ?? [])
+    setNotesAvailable(data.notesAvailable !== false)
     setNeedsOnboarding(data.scheduledWorkouts.length === 0)
   }, [])
 
@@ -196,6 +207,8 @@ export default function App() {
         setWorkoutDetails({})
         setLogs([])
         setLogSplits([])
+        setExerciseNotes([])
+        setNotesAvailable(true)
         setNeedsOnboarding(false)
         setView('calendar')
         setAuthScreenMode('login')
@@ -245,6 +258,7 @@ export default function App() {
         workoutDetails,
         logs,
         logSplits,
+        exerciseNotes,
       })
 
       // Always reload calendar data after insert — don't rely on pre-generate state.
@@ -607,27 +621,98 @@ export default function App() {
     }
   }
 
-  async function handleSavePain({ workoutExerciseId: weId, painFlag, painNote }) {
+  /**
+   * Save (or clear, with an empty note and no pain) the athlete's note on one
+   * exercise. The pain checkbox is also mirrored onto logs.pain_flag /
+   * pain_note when sets exist, so older readers and adaptation keep working.
+   * Without the exercise_notes table this falls back to the old behaviour:
+   * pain notes on logs only, which needs at least one logged set.
+   * Throws (with a user-facing message) so the note sheet can stay open.
+   */
+  async function handleSaveNote({ workoutExerciseId: weId, note, isPain }) {
     if (!weId) return
-    if (!session?.user?.id) {
-      setLogError('Not signed in')
-      return
-    }
-    setSavingPainId(weId)
+    if (!session?.user?.id) throw new Error('Not signed in')
+    const text = String(note ?? '').trim()
+    const pain = Boolean(isPain)
+    const hasLogs = logs.some((l) => l.workout_exercise_id === weId)
+    const existing = exerciseNotes.find((n) => n.workout_exercise_id === weId)
+
+    setSavingNoteId(weId)
     setLogError(null)
     try {
-      const updated = await updateExercisePain({
-        workoutExerciseId: weId,
-        painFlag,
-        painNote,
-      })
-      mergeUpdatedLogs(updated)
+      let useNotesTable = notesAvailable
+      if (useNotesTable) {
+        try {
+          if (text) {
+            const row = await saveExerciseNote({
+              workoutExerciseId: weId,
+              note: text,
+              isPain: pain,
+            })
+            setExerciseNotes((prev) => [
+              ...prev.filter((n) => n.workout_exercise_id !== weId),
+              row,
+            ])
+          } else {
+            if (pain && !hasLogs) {
+              throw new Error('Add a few words about the pain so it can be saved.')
+            }
+            if (existing) {
+              await deleteExerciseNote({ workoutExerciseId: weId })
+              setExerciseNotes((prev) =>
+                prev.filter((n) => n.workout_exercise_id !== weId),
+              )
+            }
+          }
+        } catch (err) {
+          if (!isMissingNotesTable(err)) throw err
+          setNotesAvailable(false)
+          useNotesTable = false
+        }
+      }
+
+      if (!useNotesTable) {
+        if (!hasLogs) {
+          throw new Error('Log a set first — notes before the first set need a database update.')
+        }
+        if (text && !pain) {
+          throw new Error(
+            'Only pain / discomfort notes can be saved until the database is updated — tick the box or clear the note.',
+          )
+        }
+      }
+
+      if (hasLogs) {
+        const loggedPain = logs.some(
+          (l) => l.workout_exercise_id === weId && l.pain_flag,
+        )
+        if (pain || loggedPain) {
+          try {
+            const updated = await updateExercisePain({
+              workoutExerciseId: weId,
+              painFlag: pain,
+              painNote: pain ? text : null,
+            })
+            mergeUpdatedLogs(updated)
+          } catch (err) {
+            if (!useNotesTable) throw err
+            console.error(err)
+            throw new Error(
+              'Note saved, but the pain flag on your logged sets could not be updated — try again.',
+            )
+          }
+        }
+      }
     } catch (err) {
       console.error(err)
-      setLogError(err.message || 'Could not save note — try again')
+      throw new Error(err?.message || 'Could not save note — try again')
     } finally {
-      setSavingPainId(null)
+      setSavingNoteId(null)
     }
+  }
+
+  async function handleDeleteNote(weId) {
+    return handleSaveNote({ workoutExerciseId: weId, note: '', isPain: false })
   }
 
   // workout_exercise id → { exerciseId, date, … } for "last time" / PRs.
@@ -853,8 +938,10 @@ export default function App() {
         onBack={backToCalendar}
         backLabel={workoutReturnView === 'history' ? 'History' : 'Calendar'}
         onLogExercise={openLog}
-        onSavePain={handleSavePain}
-        savingPainId={savingPainId}
+        exerciseNotes={exerciseNotes}
+        onSaveNote={handleSaveNote}
+        onDeleteNote={handleDeleteNote}
+        savingNoteId={savingNoteId}
         onFinishWorkout={handleFinishWorkout}
         finishingWorkout={finishingWorkout}
         justCompleted={justCompleted}

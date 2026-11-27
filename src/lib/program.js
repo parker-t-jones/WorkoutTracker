@@ -22,6 +22,7 @@ import {
   filterScheduledToHorizon,
   resolvePainSubstitutions,
 } from './adapt'
+import { fetchExerciseNotes } from './notes'
 
 const GENERATE_ERROR = "couldn't generate program, try again"
 
@@ -147,12 +148,14 @@ export async function loadProgramData(userId) {
       workoutDetails: {},
       logs: [],
       logSplits: [],
+      exerciseNotes: [],
+      notesAvailable: true,
     }
   }
 
   const scheduledWorkoutIds = new Set(scheduledWorkouts.map((s) => s.workout_id))
 
-  const [allWorkouts, workoutExercises, allLogs, logSplits] =
+  const [allWorkouts, workoutExercises, allLogs, logSplits, notesResult] =
     await Promise.all([
       fetchAll(() =>
         client
@@ -171,6 +174,8 @@ export async function loadProgramData(userId) {
           .order('id', { ascending: true }),
       ),
       fetchUserLogSplits(userId),
+      // Never throws: no notes if 2026-11-notes-and-editing.sql isn't run.
+      fetchExerciseNotes(userId),
     ])
 
   // Keep the previous shape: only workouts that are on the schedule (their
@@ -178,6 +183,9 @@ export async function loadProgramData(userId) {
   const workouts = allWorkouts.filter((w) => scheduledWorkoutIds.has(w.id))
   const weIds = new Set(workoutExercises.map((we) => we.id))
   const logs = allLogs.filter((l) => weIds.has(l.workout_exercise_id))
+  const exerciseNotes = notesResult.notes.filter((n) =>
+    weIds.has(n.workout_exercise_id),
+  )
 
   const exercisesByWorkout = new Map()
   for (const we of workoutExercises) {
@@ -202,6 +210,8 @@ export async function loadProgramData(userId) {
     workoutDetails,
     logs,
     logSplits,
+    exerciseNotes,
+    notesAvailable: notesResult.available,
   }
 }
 
@@ -628,6 +638,8 @@ export async function generateAndSaveNextWeek({
   logs,
   /** Already-loaded splits from loadProgramData; fetched (scoped) if omitted. */
   logSplits: loadedLogSplits,
+  /** exercise_notes rows from loadProgramData ([] before the migration). */
+  exerciseNotes = [],
 }) {
   if (!userId) throw new Error('Not signed in')
 
@@ -666,6 +678,7 @@ export async function generateAndSaveNextWeek({
     weekWorkouts: weekEntry.workouts,
     logs,
     logSplits,
+    exerciseNotes,
   })
 
   const profile = await fetchUserProfile(userId)

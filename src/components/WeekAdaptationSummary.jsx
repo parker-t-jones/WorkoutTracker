@@ -36,7 +36,7 @@ export default function WeekAdaptationSummary({
       {substituted.length > 0 ? (
         <section className="mb-5 rounded border border-amber-200 bg-amber-50 px-3 py-3">
           <h2 className="font-display text-sm font-semibold text-amber-950">
-            Felt off — swapped from vetted list
+            Pain / discomfort — swapped from vetted list
           </h2>
           <p className="mt-1 text-xs text-amber-900/80">
             These were flagged last week. Replacements come from the vetted

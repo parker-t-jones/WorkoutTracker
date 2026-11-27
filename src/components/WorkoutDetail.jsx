@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { NotebookPen, TriangleAlert } from 'lucide-react'
 import {
   exerciseRpe,
   exerciseHasPain,
@@ -15,6 +16,45 @@ import {
 } from '../lib/units'
 import { logWeightIn } from '../lib/progress'
 import { formatDateKey } from '../lib/dates'
+import { notesByWorkoutExercise } from '../lib/notes'
+import ExerciseNoteSheet from './ExerciseNoteSheet'
+
+/**
+ * The athlete's note for one exercise: exercise_notes row, else a legacy
+ * logs.pain_flag / pain_note ("felt off") from before notes existed.
+ */
+function noteFor(we, notesMap, logs) {
+  const row = notesMap.get(we.id) ?? null
+  const logPain = exerciseHasPain(logs, we.id)
+  const text = row?.note ?? (logPain ? exercisePainNote(logs, we.id) : null)
+  return {
+    text: text || null,
+    isPain: Boolean(row?.is_pain) || logPain,
+    exists: Boolean(row) || logPain,
+  }
+}
+
+function NotePreview({ note }) {
+  if (!note.exists) return null
+  return (
+    <p
+      className={[
+        'mt-2 flex items-start gap-1.5 text-xs',
+        note.isPain ? 'text-danger' : 'text-muted',
+      ].join(' ')}
+    >
+      {note.isPain ? (
+        <TriangleAlert aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+      ) : (
+        <NotebookPen aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+      )}
+      <span className="line-clamp-2 break-words">
+        {note.isPain ? 'Pain / discomfort' : 'Note'}
+        {note.text ? ` — ${note.text}` : ''}
+      </span>
+    </p>
+  )
+}
 
 function prescribeLabel(we) {
   if (isCardioExercise(we)) {
@@ -57,8 +97,12 @@ export default function WorkoutDetail({
   onBack,
   backLabel = 'Calendar',
   onLogExercise,
-  onSavePain,
-  savingPainId,
+  // Athlete notes (see ExerciseNoteSheet). onSaveNote/onDeleteNote throw on
+  // failure so the sheet can stay open.
+  exerciseNotes = [],
+  onSaveNote = null,
+  onDeleteNote = null,
+  savingNoteId = null,
   onFinishWorkout,
   finishingWorkout = false,
   justCompleted,
@@ -68,9 +112,15 @@ export default function WorkoutDetail({
   renderExerciseExtras = null,
 }) {
   const { workout, exercises, date, status } = scheduled
-  const [painOpenId, setPainOpenId] = useState(null)
-  const [painDraft, setPainDraft] = useState('')
+  const [noteOpenId, setNoteOpenId] = useState(null)
   const [weightUnit] = useState(() => getWeightUnit())
+  const notesMap = useMemo(
+    () => notesByWorkoutExercise(exerciseNotes),
+    [exerciseNotes],
+  )
+  const noteExercise =
+    noteOpenId != null ? exercises.find((we) => we.id === noteOpenId) : null
+  const openNote = noteExercise ? noteFor(noteExercise, notesMap, logs) : null
 
   let doneUnits = 0
   let totalUnits = 0
@@ -92,26 +142,6 @@ export default function WorkoutDetail({
       'Finish this workout now? Unlogged sets will count as skipped.',
     )
     if (ok) onFinishWorkout()
-  }
-
-  function openPain(weId) {
-    setPainOpenId(weId)
-    setPainDraft(exercisePainNote(logs, weId) ?? '')
-  }
-
-  function closePain() {
-    setPainOpenId(null)
-    setPainDraft('')
-  }
-
-  async function savePain(weId, flagged) {
-    if (!onSavePain) return
-    await onSavePain({
-      workoutExerciseId: weId,
-      painFlag: flagged,
-      painNote: flagged ? painDraft : null,
-    })
-    if (!flagged) closePain()
   }
 
   return (
@@ -157,9 +187,7 @@ export default function WorkoutDetail({
             .filter((l) => l.workout_exercise_id === we.id)
             .sort((a, b) => a.set_number - b.set_number)
           const rpe = exerciseRpe(logs, we.id)
-          const hasPain = exerciseHasPain(logs, we.id)
-          const painOpen = painOpenId === we.id
-          const savingThis = savingPainId === we.id
+          const note = noteFor(we, notesMap, logs)
           const parentIds = new Set(logged.map((l) => l.id))
           const splits = (logSplits ?? []).filter((s) =>
             parentIds.has(s.log_id),
@@ -185,6 +213,7 @@ export default function WorkoutDetail({
                     <div className="mt-1 text-sm text-muted">{we.notes}</div>
                   ) : null}
                   {renderExerciseExtras ? renderExerciseExtras(we) : null}
+                  <NotePreview note={note} />
                   {logged.length > 0 && (
                     <div className="mt-2 space-y-1.5">
                       <div className="text-xs text-success/85">
@@ -255,14 +284,6 @@ export default function WorkoutDetail({
                             : 'Add RPE'}
                         </button>
                       ) : null}
-                      {hasPain ? (
-                        <span className="block text-xs text-amber-800">
-                          felt off
-                          {exercisePainNote(logs, we.id)
-                            ? ` — ${exercisePainNote(logs, we.id)}`
-                            : ''}
-                        </span>
-                      ) : null}
                     </div>
                   )}
                 </div>
@@ -274,84 +295,49 @@ export default function WorkoutDetail({
                   >
                     {exerciseDone ? 'Edit' : done > 0 ? 'Continue' : 'Log'}
                   </button>
-                  {logged.length > 0 ? (
+                  {onSaveNote ? (
                     <button
                       type="button"
-                      onClick={() =>
-                        painOpen ? closePain() : openPain(we.id)
-                      }
+                      onClick={() => setNoteOpenId(we.id)}
                       className={[
-                        'rounded px-2 py-1.5 text-center text-xs font-medium',
-                        hasPain || painOpen
+                        'flex min-h-11 items-center justify-center gap-1 rounded px-2 text-center text-xs font-medium',
+                        note.exists
                           ? 'bg-ink/15 text-ink ring-1 ring-ink/20'
                           : 'bg-ink/10 text-muted hover:bg-ink/15 hover:text-ink',
                       ].join(' ')}
-                      aria-expanded={painOpen}
                       aria-label={
-                        hasPain ? 'Edit felt-off note' : 'Flag if this felt off'
+                        note.exists
+                          ? `Edit note for ${we.exercise?.name ?? 'exercise'}`
+                          : `Add note for ${we.exercise?.name ?? 'exercise'}`
                       }
                     >
-                      {hasPain ? 'Felt off ✓' : 'Felt off?'}
+                      <NotebookPen aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                      {note.exists ? 'Edit note' : 'Note'}
                     </button>
                   ) : null}
                 </div>
               </div>
 
-              {painOpen ? (
-                <div className="mt-3 space-y-2 border-t border-orange-dim/30 pt-3">
-                  <p className="text-xs text-muted">
-                    Optional — note where or what felt off. Not medical advice,
-                    just for your log.
-                  </p>
-                  <textarea
-                    value={painDraft}
-                    onChange={(e) => setPainDraft(e.target.value)}
-                    rows={2}
-                    placeholder="e.g. left knee on the run"
-                    className="w-full rounded border border-orange-dim/50 bg-bg px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      disabled={savingThis}
-                      onClick={() => savePain(we.id, true)}
-                      className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-on-orange hover:bg-orange-dim disabled:opacity-60"
-                    >
-                      {savingThis ? 'Saving…' : hasPain ? 'Update note' : 'Save'}
-                    </button>
-                    {hasPain ? (
-                      <button
-                        type="button"
-                        disabled={savingThis}
-                        onClick={() => savePain(we.id, false)}
-                        className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt hover:text-ink disabled:opacity-60"
-                      >
-                        Clear
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={savingThis}
-                        onClick={() => savePain(we.id, true)}
-                        className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt hover:text-ink disabled:opacity-60"
-                      >
-                        Flag without note
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={closePain}
-                      className="rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-alt"
-                    >
-                      Close
-                    </button>
-                  </div>
-                </div>
-              ) : null}
             </li>
           )
         })}
       </ul>
+
+      {noteExercise && onSaveNote ? (
+        <ExerciseNoteSheet
+          key={noteExercise.id}
+          exerciseName={noteExercise.exercise?.name ?? 'Exercise'}
+          initialNote={openNote.text ?? ''}
+          initialPain={openNote.isPain}
+          hasNote={openNote.exists}
+          saving={savingNoteId === noteExercise.id}
+          onSave={({ note, isPain }) =>
+            onSaveNote({ workoutExerciseId: noteExercise.id, note, isPain })
+          }
+          onDelete={() => onDeleteNote?.(noteExercise.id)}
+          onClose={() => setNoteOpenId(null)}
+        />
+      ) : null}
 
       {canFinish ? (
         <button

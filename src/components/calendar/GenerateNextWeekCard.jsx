@@ -66,7 +66,7 @@ export default function GenerateNextWeekCard({ onGenerate, generating, error }) 
         <>
           <p className="text-sm text-ink">
             Current week is done. Generate next week from your logs (loads, RPE,
-            and any felt-off flags).
+            your notes and any pain flags).
           </p>
           {error ? (
             <p

@@ -41,6 +41,7 @@ import {
   isMissingNotesTable,
 } from './lib/notes'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
+import { signOutDeletedAccount } from './lib/account'
 import { workoutExerciseIndex } from './lib/progress'
 import { buildScheduledProgress } from './lib/schedule'
 import { listMyCoachLinks, todayIso } from './lib/coach'
@@ -62,6 +63,8 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [authScreenMode, setAuthScreenMode] = useState('login')
   const [passwordRecovery, setPasswordRecovery] = useState(false)
+  // Shown on the auth screen after the user deletes their account.
+  const [authNotice, setAuthNotice] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [onboardingError, setOnboardingError] = useState(null)
@@ -228,6 +231,7 @@ export default function App() {
       if (event === 'TOKEN_REFRESHED') return
 
       if (nextSession?.user) {
+        setAuthNotice(null)
         // Same user (SIGNED_IN on refocus, USER_UPDATED, …): nothing to reload.
         if (loadedUserIdRef.current === nextSession.user.id) return
         loadedUserIdRef.current = nextSession.user.id
@@ -341,6 +345,11 @@ export default function App() {
     }
     setLoadError(null)
     setAdaptationSummary(null)
+  }
+
+  async function handleAccountDeleted() {
+    setAuthNotice('Your account has been deleted.')
+    await signOutDeletedAccount()
   }
 
   function handleRetryLoad() {
@@ -1026,6 +1035,7 @@ export default function App() {
       <AuthScreen
         key={authScreenMode}
         mode={authScreenMode}
+        notice={authNotice}
         onAuthed={() => {
           /* session listener loads data */
         }}
@@ -1045,6 +1055,7 @@ export default function App() {
         submitting={submitting}
         onSignOut={handleSignOut}
         signOutError={signOutError}
+        onAccountDeleted={handleAccountDeleted}
       />
     )
     if (!isCoach) return form
@@ -1217,6 +1228,8 @@ export default function App() {
             signOutError={signOutError}
             onOpenProposals={() => setView('proposals')}
             onCoachLinksChange={loadCoachStatus}
+            isCoach={isCoach}
+            onAccountDeleted={handleAccountDeleted}
           />
         ) : view === 'history' ? (
           <HistoryView

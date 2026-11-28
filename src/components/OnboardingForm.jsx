@@ -6,6 +6,7 @@ import {
   firstWeekScheduleDates,
 } from '../lib/user'
 import { formatDateKey } from '../lib/dates'
+import { DeleteAccountSheet } from './DeleteAccountSection'
 
 const GOALS = [
   { id: 'strength', label: 'Strength' },
@@ -231,7 +232,9 @@ export default function OnboardingForm({
   submitting,
   onSignOut,
   signOutError = null,
+  onAccountDeleted,
 }) {
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState(1)
   const [animKey, setAnimKey] = useState(0)
@@ -318,15 +321,33 @@ export default function OnboardingForm({
         ) : (
           <span className="text-sm text-muted">Set up</span>
         )}
-        <button
-          type="button"
-          onClick={onSignOut}
-          disabled={submitting}
-          className="text-sm text-muted underline hover:text-ink disabled:opacity-60"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-4">
+          {onAccountDeleted ? (
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(true)}
+              disabled={submitting}
+              className="text-sm text-muted underline hover:text-danger disabled:opacity-60"
+            >
+              Delete account
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onSignOut}
+            disabled={submitting}
+            className="text-sm text-muted underline hover:text-ink disabled:opacity-60"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
+      {deleteOpen ? (
+        <DeleteAccountSheet
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={onAccountDeleted}
+        />
+      ) : null}
       {signOutError ? (
         <p role="alert" className="-mt-4 mb-4 text-right text-sm text-danger">
           {signOutError}

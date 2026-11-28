@@ -15,6 +15,9 @@ function sameMonth(a, b) {
  * Month calendar with prev/next/today navigation. `byDate` maps
  * YYYY-MM-DD → scheduled workouts on that date (several per day allowed;
  * tapping such a day opens a small chooser under the grid).
+ *
+ * onSelectDay (coach builder): when given, empty days are tappable too and
+ * call onSelectDay(dateKey) to assign a workout on that date.
  */
 export default function MonthGrid({
   month,
@@ -24,6 +27,7 @@ export default function MonthGrid({
   getWorkout,
   todayKey,
   onSelectScheduled,
+  onSelectDay,
 }) {
   const [chooserDate, setChooserDate] = useState(null)
   const now = new Date()
@@ -117,7 +121,7 @@ export default function MonthGrid({
           const dateLabel = formatDateKey(cell.key)
           const ariaLabel =
             items.length === 0
-              ? `${dateLabel}${isToday ? ', today' : ''}, no workout`
+              ? `${dateLabel}${isToday ? ', today' : ''}, ${onSelectDay ? 'add a workout' : 'no workout'}`
               : items.length === 1
                 ? `${dateLabel}${isToday ? ', today' : ''}: ${firstWorkout?.focus ?? 'Workout'}, ${STATUS_LABEL[statuses[0]]}`
                 : `${dateLabel}${isToday ? ', today' : ''}: ${items.length} workouts`
@@ -126,12 +130,13 @@ export default function MonthGrid({
             <button
               key={cell.key}
               type="button"
-              disabled={items.length === 0}
+              disabled={items.length === 0 && !onSelectDay}
               aria-label={ariaLabel}
               aria-current={isToday ? 'date' : undefined}
               aria-expanded={items.length > 1 ? chooserDate === cell.key : undefined}
               onClick={() => {
-                if (items.length === 1) onSelectScheduled(first.id)
+                if (items.length === 0) onSelectDay?.(cell.key)
+                else if (items.length === 1) onSelectScheduled(first.id)
                 else if (items.length > 1) {
                   setChooserDate((d) => (d === cell.key ? null : cell.key))
                 }
@@ -143,7 +148,9 @@ export default function MonthGrid({
                   ? allDone
                     ? 'border-orange/20 bg-surface text-ink hover:border-orange/35'
                     : 'border-orange bg-surface text-ink hover:border-orange-dim'
-                  : 'border-transparent bg-transparent text-muted',
+                  : onSelectDay
+                    ? 'border-dashed border-orange-dim/35 bg-transparent text-muted hover:border-orange/50 hover:text-ink'
+                    : 'border-transparent bg-transparent text-muted',
               ].join(' ')}
             >
               <span className="flex w-full items-center justify-between gap-0.5">
@@ -166,6 +173,13 @@ export default function MonthGrid({
                       {firstWorkout.focus}
                     </span>
                   ) : null}
+                </span>
+              ) : onSelectDay ? (
+                <span
+                  className="mt-auto font-display text-[10px] leading-tight text-muted"
+                  aria-hidden="true"
+                >
+                  +
                 </span>
               ) : null}
             </button>

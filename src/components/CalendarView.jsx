@@ -30,6 +30,16 @@ export default function CalendarView({
   onGenerateNextWeek,
   generatingNextWeek = false,
   generateNextWeekError = null,
+  /** Athlete with an active coach: no AI "generate next week" card. */
+  coachManagesTraining = false,
+  /** Coach view of an athlete: empty days are tappable to assign a workout. */
+  onSelectDay,
+  writable = false,
+  onBack,
+  backLabel = '← Back',
+  /** Small line above the title (coach view: the athlete's name). */
+  eyebrow,
+  hint,
 }) {
   const todayKey = getTodayKey()
   const [localMonth, setLocalMonth] = useState(() => {
@@ -44,16 +54,31 @@ export default function CalendarView({
   const upcoming = useMemo(() => sortScheduled(upcomingWorkouts), [upcomingWorkouts])
   const programWeek = currentProgramWeek(sorted, getWorkout)
   const hasHistory = Boolean(onOpenHistory) && sorted.some((sw) => sw.date < todayKey)
+  const canAssign = writable && Boolean(onSelectDay)
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          className="-ml-2 mb-2 min-h-11 px-2 text-sm text-muted hover:text-ink"
+        >
+          {backLabel}
+        </button>
+      ) : null}
       <header className="mb-6">
-        {programWeek != null ? (
-          <p className="text-sm text-muted">Week {programWeek}</p>
+        {eyebrow || programWeek != null ? (
+          <p className="text-sm text-muted">
+            {[eyebrow, programWeek != null ? `Week ${programWeek}` : null]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
         ) : null}
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           {formatDateKey(todayKey)}
         </h1>
+        {hint ? <p className="mt-2 text-sm text-muted">{hint}</p> : null}
       </header>
 
       <TodayCard
@@ -64,7 +89,15 @@ export default function CalendarView({
         onSelectScheduled={onSelectScheduled}
       />
 
-      {canGenerateNextWeek || generatingNextWeek ? (
+      {coachManagesTraining && !generatingNextWeek ? (
+        canGenerateNextWeek ? (
+          <div className="mb-6 rounded border border-orange-dim/40 bg-surface px-3 py-3">
+            <p className="text-sm text-ink">
+              Your coach manages your training — they’ll add your next workouts.
+            </p>
+          </div>
+        ) : null
+      ) : canGenerateNextWeek || generatingNextWeek ? (
         <GenerateNextWeekCard
           onGenerate={onGenerateNextWeek}
           generating={generatingNextWeek}
@@ -80,6 +113,7 @@ export default function CalendarView({
         getWorkout={getWorkout}
         todayKey={todayKey}
         onSelectScheduled={onSelectScheduled}
+        onSelectDay={canAssign ? onSelectDay : undefined}
       />
 
       <div className="mt-8 mb-2 flex items-center justify-between">
@@ -98,7 +132,11 @@ export default function CalendarView({
       </div>
       <ul className="space-y-2">
         {upcoming.length === 0 ? (
-          <li className="text-sm text-muted">No workouts in this window.</li>
+          <li className="text-sm text-muted">
+            {canAssign
+              ? 'No workouts yet. Tap a day to assign one.'
+              : 'No workouts in this window.'}
+          </li>
         ) : null}
         {upcoming.map((sw) => {
           const progress = progressById.get(sw.id)

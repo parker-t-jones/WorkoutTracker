@@ -1,18 +1,26 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronRight, LoaderCircle, UserPlus } from 'lucide-react'
 import {
   endCoachRelationship,
   groupAthleteLinks,
   inviteAthleteByEmail,
   listMyCoachLinks,
-} from '../../lib/coach'
-import AthleteSchedule from './AthleteSchedule'
+} from '../lib/coach'
+import AthleteCalendar from './AthleteCalendar'
 
 /**
- * Coach tab: invite athletes, see them grouped Active / Pending / Ended,
- * open an active athlete's schedule to attach demo media.
+ * Coaching mode → Athletes: invite athletes by email, see them grouped
+ * Active / Pending / Ended, end or re-invite, and open an active athlete's
+ * calendar (AthleteCalendar) to prescribe workouts, review their logs and
+ * notes, and attach demo media.
+ *
+ * Every link change goes through the SECURITY DEFINER RPCs in
+ * supabase/2026-11-hardening.sql (coach_athletes has no direct
+ * INSERT/UPDATE policies). The roster also comes from list_my_coach_links,
+ * because users RLS is own-row-only: an embed of the athlete's users row
+ * would always come back null.
  */
-export default function CoachHome({ coachId }) {
+export default function AthletesView({ coachId, rosterNonce = 0 }) {
   const [links, setLinks] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
@@ -23,6 +31,7 @@ export default function CoachHome({ coachId }) {
   const [actionError, setActionError] = useState(null)
   const [selected, setSelected] = useState(null)
   const [showEnded, setShowEnded] = useState(false)
+  const rosterNonceRef = useRef(rosterNonce)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -38,8 +47,16 @@ export default function CoachHome({ coachId }) {
   }, [])
 
   useEffect(() => {
+    if (coachId) load()
+  }, [coachId, load])
+
+  // Tapping the Athletes tab again returns to the roster.
+  useEffect(() => {
+    if (rosterNonceRef.current === rosterNonce) return
+    rosterNonceRef.current = rosterNonce
+    setSelected(null)
     load()
-  }, [load])
+  }, [rosterNonce, load])
 
   async function invite(addr) {
     if (inviting) return
@@ -80,11 +97,18 @@ export default function CoachHome({ coachId }) {
     }
   }
 
+  const label = (l) => l.other_name || l.other_email || 'Athlete'
+
   if (selected) {
     return (
-      <AthleteSchedule
+      <AthleteCalendar
         coachId={coachId}
-        link={selected}
+        athlete={{
+          id: selected.other_user_id,
+          linkId: selected.id,
+          name: label(selected),
+          email: selected.other_email ?? null,
+        }}
         onBack={() => {
           setSelected(null)
           load()
@@ -94,14 +118,16 @@ export default function CoachHome({ coachId }) {
   }
 
   const groups = groupAthleteLinks(links)
-  const label = (l) => l.other_name || l.other_email || 'Athlete'
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <header className="mb-6">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">Coach</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          Athletes
+        </h1>
         <p className="mt-1 text-sm text-muted">
-          Invite athletes, follow their training and add demo photos/videos to their exercises.
+          Invite athletes, build their workouts, follow their logs and add demo
+          photos/videos to their exercises.
         </p>
       </header>
 
@@ -190,7 +216,7 @@ export default function CoachHome({ coachId }) {
                   className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded border border-orange-dim/40 bg-surface px-3 py-3 text-left hover:border-orange"
                 >
                   <div className="min-w-0">
-                    <div className="truncate font-medium text-ink">{label(l)}</div>
+                    <div className="truncate font-display font-medium text-ink">{label(l)}</div>
                     {l.other_email && l.other_name ? (
                       <div className="truncate text-xs text-muted">{l.other_email}</div>
                     ) : null}
@@ -209,7 +235,10 @@ export default function CoachHome({ coachId }) {
             ))}
           </ul>
         ) : !loading ? (
-          <p className="text-sm text-muted">No active athletes yet.</p>
+          <p className="text-sm text-muted">
+            No active athletes yet. Invite one above — they appear here once
+            they accept.
+          </p>
         ) : null}
       </section>
 

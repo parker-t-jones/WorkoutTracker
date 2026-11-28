@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { Calendar, Clock, TrendingUp, Trophy, User, Users } from 'lucide-react'
 import CalendarView from './components/CalendarView'
 import WorkoutDetail from './components/WorkoutDetail'
 import HistoryView from './components/HistoryView'
@@ -12,7 +13,8 @@ import AuthScreen from './components/AuthScreen'
 import AccountView from './components/AccountView'
 import WeekAdaptationSummary from './components/WeekAdaptationSummary'
 import ProposedSubstitutionsView from './components/ProposedSubstitutionsView'
-import CoachHome from './components/coach/CoachHome'
+import AthletesView from './components/AthletesView'
+import ModeSwitcher from './components/ModeSwitcher'
 import { DemoChip, HowToDoIt } from './components/ExerciseDemo'
 import { useExerciseMedia } from './lib/useExerciseMedia'
 import { supabase } from './lib/supabase'
@@ -41,6 +43,14 @@ import {
   isMissingNotesTable,
 } from './lib/notes'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
+import {
+  getIntendedRole,
+  setIntendedRole,
+  clearIntendedRole,
+  getStoredAppMode,
+  setStoredAppMode,
+  clearStoredAppMode,
+} from './lib/roles'
 import { signOutDeletedAccount } from './lib/account'
 import { workoutExerciseIndex } from './lib/progress'
 import { buildScheduledProgress } from './lib/schedule'
@@ -57,6 +67,21 @@ import {
   insertWorkoutExercise,
   updateWorkoutExercise,
 } from './lib/workoutEditApi'
+
+const TRAINING_TABS = [
+  { id: 'calendar', label: 'Calendar', Icon: Calendar },
+  { id: 'history', label: 'History', Icon: Clock },
+  { id: 'progress', label: 'Progress', Icon: TrendingUp },
+  { id: 'leaderboard', label: 'Leaderboard', Icon: Trophy },
+  { id: 'account', label: 'Account', Icon: User },
+]
+
+// Coaching mode (users.is_coach only): the coach's athletes — invites, their
+// calendars, the workout builder, logs/notes and demo media — plus Account.
+const COACHING_TABS = [
+  { id: 'athletes', label: 'Athletes', Icon: Users },
+  { id: 'account', label: 'Account', Icon: User },
+]
 
 export default function App() {
   const [bootstrapping, setBootstrapping] = useState(true)
@@ -79,8 +104,8 @@ export default function App() {
   const [workoutsById, setWorkoutsById] = useState({})
   const [workoutDetails, setWorkoutDetails] = useState({})
   const [userId, setUserId] = useState(null)
-  // users.is_coach from ensureProfile — gates the Coach tab (RLS/RPCs enforce
-  // the real permission server-side).
+  // users.is_coach from ensureProfile — gates Coaching mode (RLS/RPCs enforce
+  // the real permission server-side; the app can't grant it).
   const [isCoach, setIsCoach] = useState(false)
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
@@ -99,7 +124,16 @@ export default function App() {
   // Edits to workout_exercises run one at a time (optimistic UI first).
   const editQueueRef = useRef(Promise.resolve())
 
-  const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | coach | workout | log | week-summary | proposals
+  const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | athletes | workout | log | week-summary | proposals
+  // Sign-in split: the role picked on the auth landing ('athlete' | 'coach'),
+  // and which side of the app a coach is using ('training' | 'coaching').
+  const [intendedRole, setIntendedRoleState] = useState(() => getIntendedRole())
+  const [appMode, setAppMode] = useState('training')
+  // Picked "Sign in as a Coach" but users.is_coach is false.
+  const [coachDenied, setCoachDenied] = useState(false)
+  const roleRoutedRef = useRef(false)
+  // Bumped when the Athletes tab is tapped so AthletesView returns to the roster.
+  const [rosterNonce, setRosterNonce] = useState(0)
   // Where "back" from a workout goes (it can be opened from the history list).
   const [workoutReturnView, setWorkoutReturnView] = useState('calendar')
   // Month shown in the calendar grid — kept here so it survives opening a workout.
@@ -123,7 +157,9 @@ export default function App() {
   // app — that would unmount LogSet mid-entry.
   const loadedUserIdRef = useRef(null)
 
-  const applyProgramData = useCallback((data) => {
+  // coached: athletes with an active coach get their workouts from the coach,
+  // so an empty schedule doesn't send them through AI onboarding.
+  const applyProgramData = useCallback((data, coached = false) => {
     setUserId(data.userId)
     setScheduledWorkouts(data.scheduledWorkouts)
     setWorkoutsById(
@@ -134,23 +170,33 @@ export default function App() {
     setLogSplits(data.logSplits ?? [])
     setExerciseNotes(data.exerciseNotes ?? [])
     setNotesAvailable(data.notesAvailable !== false)
-    setNeedsOnboarding(data.scheduledWorkouts.length === 0)
+    setNeedsOnboarding(data.scheduledWorkouts.length === 0 && !coached)
   }, [])
 
+  /** Resolves to the new status; never throws. */
   const loadCoachStatus = useCallback(async () => {
+    let status
     try {
       const links = await listMyCoachLinks()
-      setCoachStatus(hasActiveCoach(links) ? 'coached' : 'self')
+      status = hasActiveCoach(links) ? 'coached' : 'self'
     } catch (err) {
       // Coach RPCs not migrated → nobody can have a coach yet.
       if (/aren.t set up yet/i.test(err?.message || '')) {
-        setCoachStatus('self')
+        status = 'self'
       } else {
         console.warn('[coach] could not load coach status', err)
-        setCoachStatus('unknown')
+        status = 'unknown'
       }
     }
+    setCoachStatus(status)
+    return status
   }, [])
+
+  /** Athlete accepted / declined / ended a coach link (Account → Coach). */
+  const handleCoachLinksChange = useCallback(async () => {
+    const status = await loadCoachStatus()
+    if (status === 'coached') setNeedsOnboarding(false)
+  }, [loadCoachStatus])
 
   const refresh = useCallback(
     async (authUser) => {
@@ -174,13 +220,37 @@ export default function App() {
         const coach = Boolean(profile?.is_coach)
         setIsCoach(coach)
         setEquipmentAccess(profile?.equipment_access ?? null)
-        // Not awaited: edit controls just stay hidden until it resolves.
-        loadCoachStatus()
-        const data = await loadProgramData(user.id)
-        applyProgramData(data)
-        // A coach who doesn't train with the app lands on the Coach tab
-        // instead of being forced through onboarding.
-        if (coach && data.scheduledWorkouts.length === 0) setView('coach')
+
+        // Route once per sign-in: the role picked on the landing screen wins;
+        // otherwise a coach resumes their last mode (default Coaching), so a
+        // coach who doesn't train with the app never sees onboarding.
+        if (!roleRoutedRef.current) {
+          roleRoutedRef.current = true
+          const intended = getIntendedRole()
+          if (intended === 'coach' && !coach) {
+            setCoachDenied(true)
+            setIntendedRoleState('coach')
+            return null
+          }
+          setCoachDenied(false)
+          let mode = 'training'
+          if (intended === 'coach') mode = 'coaching'
+          else if (intended === 'athlete') mode = 'training'
+          else if (coach) mode = getStoredAppMode() ?? 'coaching'
+          if (!coach) mode = 'training'
+          setAppMode(mode)
+          setStoredAppMode(mode)
+          setView(mode === 'coaching' ? 'athletes' : 'calendar')
+          clearIntendedRole()
+        }
+
+        // Coach status decides onboarding (coached athletes skip it); it
+        // never throws ('unknown' on failure → edit controls stay hidden).
+        const [status, data] = await Promise.all([
+          loadCoachStatus(),
+          loadProgramData(user.id),
+        ])
+        applyProgramData(data, status === 'coached')
         return data
       } catch (err) {
         console.error(err)
@@ -260,8 +330,16 @@ export default function App() {
         setNotesAvailable(true)
         setNeedsOnboarding(false)
         setView('calendar')
+        setWorkoutReturnView('calendar')
         setAuthScreenMode('login')
         setPasswordRecovery(false)
+        setIntendedRoleState(null)
+        setAppMode('training')
+        setCoachDenied(false)
+        roleRoutedRef.current = false
+        setRosterNonce(0)
+        clearIntendedRole()
+        clearStoredAppMode()
         setBootstrapping(false)
       }
     })
@@ -295,6 +373,9 @@ export default function App() {
 
   async function handleGenerateNextWeek() {
     if (generatingNextWeekRef.current || !userId) return
+    // Coach-managed athletes get their weeks from the coach, not the AI
+    // (generateAndSaveNextWeek re-checks against the database).
+    if (coachStatus === 'coached') return
     generatingNextWeekRef.current = true
     setGeneratingNextWeek(true)
     setNextWeekError(null)
@@ -310,9 +391,15 @@ export default function App() {
         exerciseNotes,
       })
 
+      if (result?.skipped) {
+        // A coach link became active since the app loaded.
+        await loadCoachStatus()
+        return
+      }
+
       // Always reload calendar data after insert — don't rely on pre-generate state.
       const data = await loadProgramData(userId)
-      applyProgramData(data)
+      applyProgramData(data, false)
 
       setAdaptationSummary({
         weekNumber: result.weekNumber,
@@ -345,6 +432,48 @@ export default function App() {
     }
     setLoadError(null)
     setAdaptationSummary(null)
+  }
+
+  function handleSelectRole(role) {
+    setIntendedRoleState(role)
+    setIntendedRole(role)
+    // Denied as coach → continue as an athlete with the same session.
+    if (coachDenied && role === 'athlete') {
+      setCoachDenied(false)
+      setAppMode('training')
+      setStoredAppMode('training')
+      setView('calendar')
+      clearIntendedRole()
+      const user = session?.user
+      if (user) {
+        loadedUserIdRef.current = user.id
+        setBootstrapping(true)
+        refreshRef.current(user)
+      }
+    }
+  }
+
+  function handleBackToRoles() {
+    setIntendedRoleState(null)
+    setIntendedRole(null)
+    setAuthScreenMode('login')
+  }
+
+  function handleModeChange(next) {
+    if (next === appMode) return
+    setAppMode(next)
+    setStoredAppMode(next)
+    setScheduledId(null)
+    setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
+    setJustCompleted(false)
+    setWorkoutReturnView('calendar')
+    if (next === 'coaching') {
+      setView((v) => (v === 'account' ? 'account' : 'athletes'))
+    } else {
+      setView((v) => (v === 'account' ? 'account' : 'calendar'))
+    }
   }
 
   async function handleAccountDeleted() {
@@ -959,6 +1088,7 @@ export default function App() {
 
   function changeTab(tab) {
     setView(tab)
+    if (tab === 'athletes') setRosterNonce((n) => n + 1)
     setWorkoutReturnView('calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
@@ -1030,12 +1160,17 @@ export default function App() {
     )
   }
 
-  if (!session) {
+  if (!session || coachDenied) {
     return (
       <AuthScreen
         key={authScreenMode}
         mode={authScreenMode}
         notice={authNotice}
+        selectedRole={intendedRole}
+        onSelectRole={handleSelectRole}
+        onBackToRoles={handleBackToRoles}
+        roleDenied={coachDenied}
+        onUseDifferentAccount={coachDenied ? handleSignOut : undefined}
         onAuthed={() => {
           /* session listener loads data */
         }}
@@ -1043,11 +1178,13 @@ export default function App() {
     )
   }
 
-  const coachWithoutProgram =
-    isCoach &&
-    ['coach', 'account', 'progress', 'leaderboard', 'proposals'].includes(view)
+  const coaching = isCoach && appMode === 'coaching'
+  const modeSwitcher = isCoach ? (
+    <ModeSwitcher mode={coaching ? 'coaching' : 'training'} onChange={handleModeChange} />
+  ) : null
 
-  if (needsOnboarding && !coachWithoutProgram) {
+  // A coach's own training side still needs onboarding; Coaching mode doesn't.
+  if (needsOnboarding && !coaching && view !== 'account' && view !== 'proposals') {
     const form = (
       <OnboardingForm
         onSubmit={handleOnboardingSubmit}
@@ -1061,8 +1198,8 @@ export default function App() {
     if (!isCoach) return form
     return (
       <>
-        <div className="pb-tab-bar">{form}</div>
-        <TabBar active="calendar" onChange={changeTab} showCoach />
+        {modeSwitcher}
+        {form}
       </>
     )
   }
@@ -1197,21 +1334,46 @@ export default function App() {
     )
   }
 
-  const topTab =
-    view === 'progress'
+  const topTab = coaching
+    ? view === 'account'
+      ? 'account'
+      : 'athletes'
+    : view === 'progress'
       ? 'progress'
       : view === 'leaderboard'
         ? 'leaderboard'
         : view === 'account'
           ? 'account'
-          : view === 'coach' && isCoach
-            ? 'coach'
+          : view === 'history'
+            ? 'history'
             : 'calendar'
+
+  const accountView = (
+    <AccountView
+      email={session.user.email}
+      onSignOut={handleSignOut}
+      signOutError={signOutError}
+      onOpenProposals={() => setView('proposals')}
+      onCoachLinksChange={handleCoachLinksChange}
+      isCoach={isCoach}
+      onAccountDeleted={handleAccountDeleted}
+    />
+  )
 
   return (
     <>
+      {modeSwitcher}
       <div className="pb-tab-bar">
-        {view === 'progress' ? (
+        {coaching ? (
+          view === 'account' ? (
+            accountView
+          ) : (
+            <AthletesView
+              coachId={userId ?? session.user.id}
+              rosterNonce={rosterNonce}
+            />
+          )
+        ) : view === 'progress' ? (
           <ProgressView
             scheduledWorkouts={scheduledWorkouts}
             workoutDetails={workoutDetails}
@@ -1219,25 +1381,15 @@ export default function App() {
           />
         ) : view === 'leaderboard' ? (
           <LeaderboardView currentUserId={userId ?? session.user.id} />
-        ) : view === 'coach' && isCoach ? (
-          <CoachHome coachId={userId ?? session.user.id} />
         ) : view === 'account' ? (
-          <AccountView
-            email={session.user.email}
-            onSignOut={handleSignOut}
-            signOutError={signOutError}
-            onOpenProposals={() => setView('proposals')}
-            onCoachLinksChange={loadCoachStatus}
-            isCoach={isCoach}
-            onAccountDeleted={handleAccountDeleted}
-          />
+          accountView
         ) : view === 'history' ? (
           <HistoryView
             scheduledWorkouts={scheduledWorkouts}
             progressById={progressById}
             getWorkout={getWorkout}
+            workoutDetails={workoutDetails}
             onSelectScheduled={openWorkout}
-            onBack={() => setView('calendar')}
           />
         ) : (
           <CalendarView
@@ -1250,13 +1402,18 @@ export default function App() {
             month={calendarMonth}
             onMonthChange={setCalendarMonth}
             canGenerateNextWeek={nextWeekEligibility.ready}
+            coachManagesTraining={coachStatus === 'coached'}
             onGenerateNextWeek={handleGenerateNextWeek}
             generatingNextWeek={generatingNextWeek}
             generateNextWeekError={nextWeekError}
           />
         )}
       </div>
-      <TabBar active={topTab} onChange={changeTab} showCoach={isCoach} />
+      <TabBar
+        active={topTab}
+        onChange={changeTab}
+        tabs={coaching ? COACHING_TABS : TRAINING_TABS}
+      />
     </>
   )
 }

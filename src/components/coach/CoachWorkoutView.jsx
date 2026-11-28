@@ -81,8 +81,9 @@ function AthleteNote({ text, isPain }) {
 }
 
 /**
- * Read-only view of one athlete workout for their coach: prescription,
- * what the athlete logged, and a demo media manager per exercise.
+ * One athlete workout as their coach sees it: prescription, what the athlete
+ * logged and noted (read-only), a demo media manager per exercise, and — when
+ * onEdit is given — an "Edit workout" button into the coach WorkoutBuilder.
  */
 export default function CoachWorkoutView({
   coachId,
@@ -93,6 +94,7 @@ export default function CoachWorkoutView({
   logSplits,
   exerciseNotes = [],
   onBack,
+  onEdit = null,
 }) {
   const [weightUnit] = useState(() => getWeightUnit())
   const notesMap = useMemo(
@@ -124,9 +126,18 @@ export default function CoachWorkoutView({
           ) : (
             'Not completed yet'
           )}
-          {' · read-only'}
+          {onEdit ? '' : ' · read-only'}
           {loading ? ' · loading demos…' : ''}
         </p>
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="mt-3 min-h-11 w-full rounded border border-orange-dim/40 bg-surface py-2.5 text-sm font-medium text-ink hover:border-orange"
+          >
+            Edit workout
+          </button>
+        ) : null}
       </header>
 
       {!exercises.length ? (

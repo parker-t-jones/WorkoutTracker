@@ -91,13 +91,36 @@ export function inferWeekAndDay(dateKey, scheduledWorkouts, workoutsById) {
   return { week_number: maxWeek, day_number }
 }
 
-/** Shared library (owner_id null) + this coach's private exercises. RLS also enforces this. */
+const PAGE_SIZE = 1000
+
+/** Escape LIKE wildcards so .ilike() is an exact, case-insensitive match. */
+function likeExact(text) {
+  return String(text).replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+
+/**
+ * Shared library (owner_id null) + this coach's private exercises.
+ * exercises_select_visible also returns other owners' exercises that appear
+ * in a workout the caller can see; those are filtered out of the picker.
+ * Paged: PostgREST silently truncates at max_rows (1000).
+ */
 export async function loadExerciseLibrary() {
   const client = assertSupabase()
   const coachId = await requireAuthUserId()
-  const { data, error } = await client.from('exercises').select('*')
-  if (error) throw error
-  return (data ?? [])
+  const rows = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await client
+      .from('exercises')
+      .select('*')
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    const page = data ?? []
+    rows.push(...page)
+    if (page.length < PAGE_SIZE) break
+  }
+  return rows
     .filter((e) => e.owner_id == null || e.owner_id === coachId)
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
@@ -125,11 +148,15 @@ export async function createOwnedExercise({
   )
   if (existing) return existing
 
-  const { data: visible } = await client.from('exercises').select('*')
-  const visibleMatch = (visible ?? []).find(
-    (e) => normalizeExerciseName(e.name) === want,
-  )
-  if (visibleMatch) return visibleMatch
+  // Same name already visible (shared, or this coach's own)?
+  const { data: visible, error: lookupError } = await client
+    .from('exercises')
+    .select('*')
+    .ilike('name', likeExact(trimmed))
+    .or(`owner_id.is.null,owner_id.eq.${coachId}`)
+    .limit(1)
+  if (lookupError) throw lookupError
+  if (visible?.[0]) return visible[0]
 
   const row = {
     name: trimmed,
@@ -153,9 +180,10 @@ export async function createOwnedExercise({
     const { data: again } = await client
       .from('exercises')
       .select('*')
-      .ilike('name', trimmed)
-      .maybeSingle()
-    if (again) return again
+      .ilike('name', likeExact(trimmed))
+      .or(`owner_id.is.null,owner_id.eq.${coachId}`)
+      .limit(1)
+    if (again?.[0]) return again[0]
     if (error?.code === '23505') {
       throw new Error('That exercise name is already in use')
     }
@@ -173,7 +201,7 @@ function formatPaceFields(minutes, seconds) {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-function workoutExerciseRow(workoutId, draft) {
+function workoutExerciseRow(workoutId, draft, sortOrder) {
   const exercise = draft.exercise
   if (!exercise?.id) {
     throw new Error('Every movement needs an exercise from the library')
@@ -256,6 +284,7 @@ function workoutExerciseRow(workoutId, draft) {
       distance_unit: distanceUnit,
       is_interval: isInterval,
       target_splits: isInterval ? targetSplits : null,
+      sort_order: sortOrder,
     }
   }
 
@@ -280,30 +309,70 @@ function workoutExerciseRow(workoutId, draft) {
     distance_unit: null,
     is_interval: false,
     target_splits: null,
+    sort_order: sortOrder,
   }
 }
 
+/** sort_order exists once 2026-11-notes-and-editing.sql has run. */
+function isMissingSortOrder(error) {
+  if (!error) return false
+  const text = `${error.message ?? ''} ${error.details ?? ''}`
+  return (
+    (['PGRST204', '42703'].includes(error.code) || /column/i.test(text)) &&
+    text.includes('sort_order')
+  )
+}
+
+function withoutSortOrder(row) {
+  const { sort_order: _dropped, ...rest } = row
+  return rest
+}
+
+/** Run a write; retry once without sort_order on a pre-migration database. */
+async function writeWithSortOrder(rows, write) {
+  const result = await write(rows)
+  if (!isMissingSortOrder(result.error)) return result
+  return write(Array.isArray(rows) ? rows.map(withoutSortOrder) : withoutSortOrder(rows))
+}
+
 async function insertWorkoutExercises(client, workoutId, drafts) {
-  const rows = drafts.map((draft) => workoutExerciseRow(workoutId, draft))
-  const { error } = await client.from('workout_exercises').insert(rows)
+  const rows = drafts.map((draft, i) => workoutExerciseRow(workoutId, draft, i + 1))
+  const { error } = await writeWithSortOrder(rows, (r) =>
+    client.from('workout_exercises').insert(r),
+  )
   if (error) throw error
 }
 
-async function updateWorkoutExercises(client, existingExercises, drafts) {
-  const n = drafts.length
-  for (let i = 0; i < n; i++) {
+/**
+ * Logged workout: update existing rows in place (matched by the draft's
+ * existingWeId, never by list position) and insert new ones. Rows cannot be
+ * deleted here (coaches have no DELETE policy, and logged rows are protected
+ * by workout_exercises_guard_edit), so the builder keeps existing rows.
+ */
+async function updateWorkoutExercises(client, workoutId, existingExercises, drafts) {
+  const existingById = new Map((existingExercises ?? []).map((we) => [we.id, we]))
+  for (let i = 0; i < drafts.length; i++) {
     const draft = drafts[i]
-    const existing = existingExercises[i]
-    const row = workoutExerciseRow(existing?.workout_id ?? draft.workoutId, draft)
-    if (existing?.id) {
+    const existing = draft.existingWeId ? existingById.get(draft.existingWeId) : null
+    const row = workoutExerciseRow(workoutId, draft, i + 1)
+    if (existing) {
       const { workout_id: _ignore, ...patch } = row
-      const { error } = await client
-        .from('workout_exercises')
-        .update(patch)
-        .eq('id', existing.id)
+      const { data, error } = await writeWithSortOrder(patch, (p) =>
+        client
+          .from('workout_exercises')
+          .update(p)
+          .eq('id', existing.id)
+          .eq('workout_id', workoutId)
+          .select('id'),
+      )
       if (error) throw error
+      if (!data?.length) {
+        throw new Error('You can’t edit this workout (is the athlete still active?)')
+      }
     } else {
-      const { error } = await client.from('workout_exercises').insert(row)
+      const { error } = await writeWithSortOrder(row, (r) =>
+        client.from('workout_exercises').insert(r),
+      )
       if (error) throw error
     }
   }
@@ -358,21 +427,28 @@ export async function saveAthleteWorkout({
     : inferWeekAndDay(date, scheduledWorkouts, workoutsById)
 
   if (preserveExistingRows && scheduled && existingWorkout) {
-    const { error: wErr } = await client
+    const { data: updated, error: wErr } = await client
       .from('workouts')
       .update({ focus: trimmedFocus })
       .eq('id', existingWorkout.id)
       .eq('user_id', athleteId)
+      .select('id')
     if (wErr) throw wErr
+    if (!updated?.length) {
+      throw new Error('You can’t edit this workout (is the athlete still active?)')
+    }
 
     await updateWorkoutExercises(
       client,
+      existingWorkout.id,
       existingExercises,
-      drafts.map((d) => ({ ...d, workoutId: existingWorkout.id })),
+      drafts,
     )
     return { workoutId: existingWorkout.id, scheduledId: scheduled.id }
   }
 
+  // created_by is not sent: workouts_guard_created_by sets it to auth.uid()
+  // (the coach), which is what stops the athlete editing this workout.
   const { data: workout, error: wErr } = await client
     .from('workouts')
     .insert({
@@ -388,12 +464,16 @@ export async function saveAthleteWorkout({
   await insertWorkoutExercises(client, workout.id, drafts)
 
   if (scheduled) {
-    const { error: swErr } = await client
+    const { data: retargeted, error: swErr } = await client
       .from('scheduled_workouts')
       .update({ workout_id: workout.id })
       .eq('id', scheduled.id)
       .eq('user_id', athleteId)
+      .select('id')
     if (swErr) throw swErr
+    if (!retargeted?.length) {
+      throw new Error('You can’t edit this workout (is the athlete still active?)')
+    }
     return { workoutId: workout.id, scheduledId: scheduled.id }
   }
 

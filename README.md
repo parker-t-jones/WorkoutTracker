@@ -142,18 +142,27 @@ show athletes how to do an exercise — TrueCoach-style. Everything below needs
 and the private `exercise-media` storage bucket + its policies).
 
 **Make a coach.** See *Granting coach and admin* above (`update public.users
-set is_coach = true …`), then have them reload the app — a **Coach** tab
-appears. A coach who doesn't train with the app lands on the Coach tab
-instead of onboarding.
+set is_coach = true …`), then have them reload the app. Coaches get a
+**Training / Coaching** switch at the top; they open in Coaching mode unless
+they picked *Sign in as an Athlete* (a coach who doesn't train with the app
+never sees onboarding). Picking *Sign in as a Coach* on an account without
+`is_coach` shows "This account isn't set up as a coach yet".
 
 **Invite flow.**
 1. The athlete signs up and opens the app once (so a `public.users` row exists).
-2. Coach → **Coach** tab → *Invite an athlete* → their email.
+2. Coaching → **Athletes** → *Invite an athlete* → their email.
 3. Athlete → **Account** → *Coach* card → **Accept** (or Decline).
-4. Coach taps the athlete → schedule (upcoming + recent, read-only) → a
-   workout → each exercise shows the prescription, what the athlete logged
-   (sets, RPE, the athlete's notes — pain notes highlighted) and a **Demo
-   media** manager.
+4. Coach taps the athlete → their calendar. Tap an empty day to **assign a
+   workout** (WorkoutBuilder: shared library or the coach's own custom
+   exercises, strength or cardio/intervals), or a workout to see the
+   prescription, what the athlete logged (sets, RPE, the athlete's notes —
+   pain notes highlighted), a **Demo media** manager per exercise, and
+   **Edit workout**. Coach-built workouts record the coach in
+   `workouts.created_by`, so the athlete can log them but not edit them.
+   Re-saving a workout with no logged sets replaces it (new rows); once sets
+   are logged, existing exercises stay (targets can change, new ones can be
+   added). Athletes with an active coach skip onboarding and get no AI
+   "generate next week".
 5. Either side can end it (coach: *End* on the athlete; athlete: *End
    coaching*). Access to workouts, logs **and** demo media stops immediately.
    A coach can re-invite an ended athlete; they must accept again.

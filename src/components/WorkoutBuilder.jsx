@@ -602,6 +602,7 @@ export default function WorkoutBuilder({
   }
 
   async function handleSave() {
+    let saved = null
     setSaving(true)
     setError(null)
     try {
@@ -622,7 +623,7 @@ export default function WorkoutBuilder({
           }
         }
       }
-      await saveAthleteWorkout({
+      saved = await saveAthleteWorkout({
         athleteId: athlete.id,
         date: dateKey,
         focus,
@@ -646,7 +647,7 @@ export default function WorkoutBuilder({
       return
     }
     try {
-      await onSaved()
+      await onSaved(saved)
     } catch (err) {
       console.error(err)
       setError(err.message || 'Saved, but could not refresh')
@@ -740,13 +741,16 @@ export default function WorkoutBuilder({
               <button
                 type="button"
                 onClick={() => setPickingIndex(index)}
+                disabled={!canRemove}
                 className="w-full rounded border border-orange-dim/40 bg-bg px-3 py-2 text-left hover:border-orange"
               >
                 <span className="block font-display font-medium">
                   {draft.exercise?.name ?? 'Choose exercise'}
                 </span>
                 <span className="text-xs text-muted">
-                  {draft.exercise
+                  {draft.exercise && !canRemove
+                    ? 'Logged session · exercise can’t be swapped'
+                    : draft.exercise
                     ? cardio
                       ? 'Cardio · tap to change'
                       : 'Strength · tap to change'

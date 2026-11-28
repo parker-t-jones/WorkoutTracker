@@ -10,13 +10,14 @@ export default function AuthScreen({
   mode: initialMode = 'login',
   onAuthed,
   onCancel,
+  notice = null,
 }) {
   const [mode, setMode] = useState(initialMode) // login | signup | forgot | recovery
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState(null)
-  const [info, setInfo] = useState(null)
+  const [info, setInfo] = useState(notice)
   const [busy, setBusy] = useState(false)
   // Recovery: show confirmation and wait for "Continue" so it's actually seen.
   const [passwordUpdated, setPasswordUpdated] = useState(false)

@@ -11,6 +11,13 @@ project_id = "gymtrackingapp"
 # ANTHROPIC_API_KEY (and optional ANTHROPIC_MODEL) stay server-side as secrets.
 verify_jwt = true
 
+[functions.delete-account]
+# Same two checks: the gateway requires a project JWT, then the function
+# calls auth.getUser() and returns 401 unless it belongs to a signed-in user.
+# It only ever deletes that caller. SUPABASE_SERVICE_ROLE_KEY is provided to
+# Edge Functions automatically — never put it in .env or the Vite bundle.
+verify_jwt = true
+
 [api]
 enabled = true
 # Port to use for the API URL.

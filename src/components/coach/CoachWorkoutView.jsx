@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { NotebookPen, TriangleAlert } from 'lucide-react'
 import { formatDateKey } from '../../lib/dates'
 import {
   exercisePainNote,
@@ -15,6 +16,8 @@ import {
 } from '../../lib/units'
 import { logWeightIn } from '../../lib/progress'
 import { useExerciseMedia } from '../../lib/useExerciseMedia'
+import { notesByWorkoutExercise } from '../../lib/notes'
+import { dumbbellInfo } from '../../lib/equipment'
 import DemoMediaManager from './DemoMediaManager'
 
 function prescription(we) {
@@ -43,6 +46,40 @@ function prescription(we) {
   return `${we.sets} × ${we.reps} · ${we.weight_guidance}`
 }
 
+/** The athlete's note (read-only); pain notes are highlighted. */
+function AthleteNote({ text, isPain }) {
+  if (!text && !isPain) return null
+  return (
+    <div
+      className={[
+        'mt-2 rounded border px-3 py-2 text-sm',
+        isPain
+          ? 'border-danger/40 bg-danger-bg text-danger'
+          : 'border-orange-dim/40 bg-surface-alt text-ink',
+      ].join(' ')}
+    >
+      <div
+        className={[
+          'mb-0.5 flex items-center gap-1.5 text-xs font-medium',
+          isPain ? 'text-danger' : 'text-muted',
+        ].join(' ')}
+      >
+        {isPain ? (
+          <TriangleAlert aria-hidden className="h-3.5 w-3.5" />
+        ) : (
+          <NotebookPen aria-hidden className="h-3.5 w-3.5" />
+        )}
+        {isPain ? 'Athlete note · pain / discomfort' : 'Athlete note'}
+      </div>
+      {text ? (
+        <p className="whitespace-pre-wrap break-words">{text}</p>
+      ) : (
+        <p className="text-xs">Flagged without a note.</p>
+      )}
+    </div>
+  )
+}
+
 /**
  * Read-only view of one athlete workout for their coach: prescription,
  * what the athlete logged, and a demo media manager per exercise.
@@ -54,9 +91,14 @@ export default function CoachWorkoutView({
   detail,
   logs,
   logSplits,
+  exerciseNotes = [],
   onBack,
 }) {
   const [weightUnit] = useState(() => getWeightUnit())
+  const notesMap = useMemo(
+    () => notesByWorkoutExercise(exerciseNotes),
+    [exerciseNotes],
+  )
   const exercises = detail?.exercises ?? []
   const workout = detail?.workout
   const { media, loading, reload } = useExerciseMedia(exercises, { coachId })
@@ -103,8 +145,14 @@ export default function CoachWorkoutView({
             .filter((s) => parentIds.has(s.log_id))
             .sort((a, b) => a.split_number - b.split_number)
           const rpe = exerciseRpe(logs, we.id)
-          const hasPain = exerciseHasPain(logs, we.id)
-          const painNote = exercisePainNote(logs, we.id)
+          // exercise_notes row, else legacy logs.pain_flag / pain_note.
+          const noteRow = notesMap.get(we.id)
+          const logPain = exerciseHasPain(logs, we.id)
+          const noteText =
+            noteRow?.note ?? (logPain ? exercisePainNote(logs, we.id) : null)
+          const notePain = Boolean(noteRow?.is_pain) || logPain
+          const db = dumbbellInfo(we)
+          const each = db.isDumbbell && !db.single ? ' each' : ''
 
           return (
             <li key={we.id} className="rounded border border-orange-dim/40 bg-surface px-3 py-3">
@@ -114,6 +162,7 @@ export default function CoachWorkoutView({
               <div className="font-display font-medium">{we.exercise?.name ?? 'Exercise'}</div>
               <div className="mt-1 text-sm text-muted">{prescription(we)}</div>
               {we.notes ? <div className="mt-1 text-sm text-muted">{we.notes}</div> : null}
+              <AthleteNote text={noteText} isPain={notePain} />
 
               <div className="mt-2 space-y-1.5">
                 <div className={['text-xs', done > 0 ? 'text-success/85' : 'text-muted'].join(' ')}>
@@ -130,7 +179,7 @@ export default function CoachWorkoutView({
                           className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
                         >
                           #{l.set_number}: {l.actual_reps}
-                          {w != null ? ` × ${roundWeight(w)} ${weightUnit}` : ''}
+                          {w != null ? ` × ${roundWeight(w)} ${weightUnit}${each}` : ''}
                         </span>
                       )
                     })}
@@ -161,11 +210,6 @@ export default function CoachWorkoutView({
                   </span>
                 ) : null}
                 {rpe != null ? <div className="font-mono text-xs text-muted">RPE {rpe}</div> : null}
-                {hasPain ? (
-                  <div className="text-xs text-danger">
-                    Felt off{painNote ? ` — ${painNote}` : ''}
-                  </div>
-                ) : null}
               </div>
 
               <DemoMediaManager

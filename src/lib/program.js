@@ -22,6 +22,8 @@ import {
   filterScheduledToHorizon,
   resolvePainSubstitutions,
 } from './adapt'
+import { fetchExerciseNotes } from './notes'
+import { sortWorkoutExercises } from './workoutEditing'
 
 const GENERATE_ERROR = "couldn't generate program, try again"
 
@@ -81,9 +83,11 @@ export async function fetchUserLogSplits(userId) {
 }
 
 /**
- * workout_exercises has no order column; the UI shows exercises in the order
- * the rows come back (insertion order), so these queries must NOT add an
- * ORDER BY and therefore cannot be paged with .range(). Instead query in
+ * workout_exercises.sort_order (2026-11-notes-and-editing.sql) gives the
+ * display order; before that migration the UI shows exercises in the order
+ * the rows come back (insertion order). So these queries must NOT add an
+ * ORDER BY (sortWorkoutExercises falls back to fetch order) and therefore
+ * cannot be paged with .range(). Instead query in
  * small chunks of workout ids (short URLs, far below max_rows) and split a
  * chunk in half if it ever comes back full.
  */
@@ -147,12 +151,14 @@ export async function loadProgramData(userId) {
       workoutDetails: {},
       logs: [],
       logSplits: [],
+      exerciseNotes: [],
+      notesAvailable: true,
     }
   }
 
   const scheduledWorkoutIds = new Set(scheduledWorkouts.map((s) => s.workout_id))
 
-  const [allWorkouts, workoutExercises, allLogs, logSplits] =
+  const [allWorkouts, workoutExercises, allLogs, logSplits, notesResult] =
     await Promise.all([
       fetchAll(() =>
         client
@@ -171,6 +177,8 @@ export async function loadProgramData(userId) {
           .order('id', { ascending: true }),
       ),
       fetchUserLogSplits(userId),
+      // Never throws: no notes if 2026-11-notes-and-editing.sql isn't run.
+      fetchExerciseNotes(userId),
     ])
 
   // Keep the previous shape: only workouts that are on the schedule (their
@@ -178,6 +186,9 @@ export async function loadProgramData(userId) {
   const workouts = allWorkouts.filter((w) => scheduledWorkoutIds.has(w.id))
   const weIds = new Set(workoutExercises.map((we) => we.id))
   const logs = allLogs.filter((l) => weIds.has(l.workout_exercise_id))
+  const exerciseNotes = notesResult.notes.filter((n) =>
+    weIds.has(n.workout_exercise_id),
+  )
 
   const exercisesByWorkout = new Map()
   for (const we of workoutExercises) {
@@ -191,7 +202,7 @@ export async function loadProgramData(userId) {
   for (const w of workouts) {
     workoutDetails[w.id] = {
       workout: w,
-      exercises: exercisesByWorkout.get(w.id) ?? [],
+      exercises: sortWorkoutExercises(exercisesByWorkout.get(w.id) ?? []),
     }
   }
 
@@ -202,6 +213,8 @@ export async function loadProgramData(userId) {
     workoutDetails,
     logs,
     logSplits,
+    exerciseNotes,
+    notesAvailable: notesResult.available,
   }
 }
 
@@ -519,6 +532,8 @@ export async function generateAndSaveProgram(formAnswers, userId) {
       typically_interval: Boolean(e.typically_interval),
       equipment_required: e.equipment_required ?? null,
       movement_pattern: e.movement_pattern,
+      // Session-rule guard (sessionRules.ts) skips knee/back/… straining swaps.
+      contraindication_tags: e.contraindication_tags ?? [],
     })),
     exercise_names: catalog.map((e) => e.name),
   })
@@ -628,6 +643,8 @@ export async function generateAndSaveNextWeek({
   logs,
   /** Already-loaded splits from loadProgramData; fetched (scoped) if omitted. */
   logSplits: loadedLogSplits,
+  /** exercise_notes rows from loadProgramData ([] before the migration). */
+  exerciseNotes = [],
 }) {
   if (!userId) throw new Error('Not signed in')
 
@@ -666,6 +683,7 @@ export async function generateAndSaveNextWeek({
     weekWorkouts: weekEntry.workouts,
     logs,
     logSplits,
+    exerciseNotes,
   })
 
   const profile = await fetchUserProfile(userId)
@@ -706,6 +724,8 @@ export async function generateAndSaveNextWeek({
       typically_interval: Boolean(e.typically_interval),
       equipment_required: e.equipment_required ?? null,
       movement_pattern: e.movement_pattern,
+      // Session-rule guard (sessionRules.ts) skips knee/back/… straining swaps.
+      contraindication_tags: e.contraindication_tags ?? [],
     })),
     exercise_names: catalog.map((e) => e.name),
     next_week_number: nextWeek,

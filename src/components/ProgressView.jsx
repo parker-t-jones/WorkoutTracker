@@ -245,17 +245,17 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
                     {pr.name}
                   </div>
                   <div className="font-mono text-xs text-muted">
-                    {pr.weight}×{pr.reps} · {formatPrDate(pr.date)}
+                    {formatPrDate(pr.date)}
+                    {pr.showE1rm ? ` · est. 1RM ${pr.e1rm} ${unit}` : ''}
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="font-display text-lg font-semibold tabular-nums">
-                    {pr.e1rm}
-                    <span className="ml-1 text-xs font-normal text-muted">
-                      {unit}
-                    </span>
+                    {pr.weight} × {pr.reps}
                   </div>
-                  <div className="text-xs text-muted">est. 1RM</div>
+                  <div className="text-xs text-muted">
+                    {pr.perDumbbell ? `${unit} each` : unit} · best set
+                  </div>
                 </div>
               </li>
             ))}

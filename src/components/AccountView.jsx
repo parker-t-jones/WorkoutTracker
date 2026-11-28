@@ -12,12 +12,20 @@ import {
   setWeightUnit,
 } from '../lib/units'
 import AthleteCoachCard from './coach/AthleteCoachCard'
+import DeleteAccountSection from './DeleteAccountSection'
+
+// Set VITE_PRIVACY_POLICY_URL in .env to show the link (App Store requires a
+// privacy policy URL); hidden while unset.
+const PRIVACY_POLICY_URL = (import.meta.env.VITE_PRIVACY_POLICY_URL || '').trim()
 
 export default function AccountView({
   email,
   onSignOut,
   signOutError = null,
   onOpenProposals,
+  onCoachLinksChange,
+  isCoach = false,
+  onAccountDeleted,
 }) {
   const [pendingCount, setPendingCount] = useState(null)
   const [theme, setTheme] = useState(() => resolveTheme())
@@ -85,7 +93,7 @@ export default function AccountView({
         <div className="mt-1 text-sm font-medium">{email || '—'}</div>
       </div>
 
-      <AthleteCoachCard />
+      <AthleteCoachCard onLinksChange={onCoachLinksChange} />
 
       <div className="mt-4 rounded border border-orange-dim/40 bg-surface px-4 py-4">
         <div className="text-xs uppercase tracking-wide text-muted">
@@ -219,6 +227,21 @@ export default function AccountView({
           {signOutError}
         </p>
       ) : null}
+
+      {PRIVACY_POLICY_URL ? (
+        <p className="mt-4 text-center text-sm">
+          <a
+            href={PRIVACY_POLICY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-muted underline hover:text-ink"
+          >
+            Privacy policy
+          </a>
+        </p>
+      ) : null}
+
+      <DeleteAccountSection isCoach={isCoach} onDeleted={onAccountDeleted} />
     </div>
   )
 }

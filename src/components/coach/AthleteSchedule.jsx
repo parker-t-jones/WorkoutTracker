@@ -78,6 +78,7 @@ export default function AthleteSchedule({ coachId, link, onBack }) {
         detail={data.workoutDetails[open.workout_id]}
         logs={data.logs}
         logSplits={data.logSplits}
+        exerciseNotes={data.exerciseNotes}
         onBack={() => setOpenId(null)}
       />
     )

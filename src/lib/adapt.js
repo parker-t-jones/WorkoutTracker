@@ -1,4 +1,5 @@
 import { countLoggedWorkSplits, workSplitNumbers } from './intervals'
+import { athleteEditSummary } from './workoutEditing'
 
 /**
  * @typedef {'substitute' | 'skip' | 'progress' | 'hold' | 'reduce_volume'} AdaptDecision
@@ -20,7 +21,7 @@ export function decideExerciseAdaptation({
   if (painFlagged) {
     return {
       decision: 'substitute',
-      reason: 'Flagged as felt off last week — resolving vetted substitute.',
+      reason: 'Flagged pain / discomfort last week — resolving vetted substitute.',
     }
   }
 
@@ -465,15 +466,23 @@ function analyzeIntervalSplits(we, weLogs, logSplits) {
 
 /**
  * Aggregate prior-week logs into per-exercise performance + decisions.
+ *
+ * Pain comes from either source: legacy/synced logs.pain_flag (+ pain_note)
+ * or exercise_notes.is_pain. Free-form exercise_notes text is passed through
+ * as athlete_notes so the model can read it.
  */
 export function buildPriorWeekAdaptation({
   weekNumber,
   weekWorkouts,
   logs,
   logSplits = [],
+  exerciseNotes = [],
 }) {
   /** @type {Map<string, object>} */
   const byExercise = new Map()
+  const noteByWe = new Map(
+    (exerciseNotes ?? []).map((n) => [n.workout_exercise_id, n]),
+  )
 
   const priorDays = []
 
@@ -527,8 +536,12 @@ export function buildPriorWeekAdaptation({
         )
         .filter((d) => d != null)
       const painLogs = weLogs.filter((l) => l.pain_flag)
+      const athleteNote = noteByWe.get(we.id) ?? null
+      const noteText = athleteNote?.note ? String(athleteNote.note) : null
+      const noteIsPain = Boolean(athleteNote?.is_pain)
       const painNote =
-        painLogs.find((l) => l.pain_note)?.pain_note ?? null
+        painLogs.find((l) => l.pain_note)?.pain_note ??
+        (noteIsPain ? noteText : null)
 
       if (!byExercise.has(key)) {
         byExercise.set(key, {
@@ -551,6 +564,8 @@ export function buildPriorWeekAdaptation({
           lateSplitFade: false,
           pain_flagged: false,
           pain_note: null,
+          athlete_notes: [],
+          athlete_edits: [],
           sample_reps: we.reps,
           sample_weight_guidance: we.weight_guidance,
           sample_sets: prescribedSets,
@@ -576,9 +591,19 @@ export function buildPriorWeekAdaptation({
         agg.intervalHitCount += 1
       }
       if (intervalMeta.lateSplitFade) agg.lateSplitFade = true
-      if (painLogs.length) {
+      if (painLogs.length || noteIsPain) {
         agg.pain_flagged = true
         if (painNote) agg.pain_note = painNote
+      }
+      if (noteText) {
+        agg.athlete_notes.push({ note: noteText, is_pain: noteIsPain })
+      }
+      // AI-trainer athletes can swap / add exercises and change set counts
+      // (workout_exercises.athlete_edits). Completion above is already
+      // measured against the edited sets; this tells the model why.
+      const editText = athleteEditSummary(we)
+      if (editText && !agg.athlete_edits.includes(editText)) {
+        agg.athlete_edits.push(editText)
       }
 
       dayExercises.push({
@@ -593,6 +618,9 @@ export function buildPriorWeekAdaptation({
         target_distance: we.target_distance ?? null,
         distance_unit: we.distance_unit ?? null,
         target_splits: we.target_splits ?? null,
+        athlete_note: noteText,
+        athlete_note_is_pain: noteIsPain,
+        athlete_edit: editText,
       })
     }
 
@@ -659,6 +687,10 @@ export function buildPriorWeekAdaptation({
           : null,
       pain_flagged: agg.pain_flagged,
       pain_note: agg.pain_note,
+      // Free-form athlete feedback for the model ([] when none).
+      athlete_notes: agg.athlete_notes,
+      // Athlete's own edits to the prescription ([] when none).
+      athlete_edits: agg.athlete_edits,
       decision,
       reason,
       prior_sets: agg.sample_sets,

@@ -31,12 +31,23 @@ All SQL is applied by hand in the Supabase **SQL editor**. Run in this order
 | 10 | `supabase/leaderboard.sql` | `family_leaderboard` RPC |
 | 11 | `supabase/coach_mode.sql` | Coach/athlete links, coach RLS, custom exercises, templates |
 | 12 | `supabase/2026-11-hardening.sql` | Security hardening (coach invite RPCs, `is_coach` guard, admin-only catalog writes, leaderboard groups + streak fix, `ensure_shared_exercise`, `logs.weight_unit`, coach demo media table + `exercise-media` storage bucket) |
+| 13 | `supabase/2026-11-notes-and-editing.sql` | Athlete notes per exercise (`exercise_notes`, readable by an active coach; `is_pain` feeds adaptation like `logs.pain_flag`) `logs.load_basis` (dumbbell sets store the weight of one dumbbell), and athlete workout editing (`workouts.created_by`, `workout_exercises.sort_order` / `athlete_edits`, a trigger that stops athletes changing coach-built workouts or deleting/swapping logged exercises) |
+| 14 | `supabase/2026-11-account-deletion.sql` | Account deletion: every FK to a user gets the right `ON DELETE` (cascade personal data; `SET NULL` for `exercises.owner_id`, `workouts.created_by`, `leaderboard_groups.created_by`) plus cleanup of unused custom exercises and empty leaderboard groups — see **Account deletion & App Store** |
 
-**Always run `2026-11-hardening.sql` last.** If you ever re-run an older file
-(especially `auth.sql`, `coach_mode.sql`, `exercises-substitutions.sql`,
-`proposed-substitutions.sql` or `leaderboard.sql`), re-run
-`2026-11-hardening.sql` afterwards — the older files recreate looser policies
-and the old (unscoped) leaderboard function.
+**Always run `2026-11-hardening.sql`, then `2026-11-notes-and-editing.sql`,
+then `2026-11-account-deletion.sql` last.** If you ran an earlier copy of
+`2026-11-notes-and-editing.sql`, re-run it (it now lets a deleted coach's
+`workouts.created_by` become NULL). If you ever re-run an older file (especially `auth.sql`,
+`coach_mode.sql`, `exercises-substitutions.sql`, `proposed-substitutions.sql`
+or `leaderboard.sql`), re-run `2026-11-hardening.sql` and the two files after it afterwards — the older
+files recreate looser policies and the old (unscoped) leaderboard function.
+Until `2026-11-notes-and-editing.sql` is run the app still works: notes can
+only be saved as pain notes on already-logged sets (the old "felt off"), and
+sets are saved without `load_basis`. AI-trainer athletes can still edit
+workouts, but without reordering, without the "athlete edited this" context
+for next week, and without the server-side coach-workout guard (the app
+already hides editing from coached athletes). Redeploy `generate-program`
+after pulling so the model is told what athlete notes and edits are.
 
 The first run of `2026-11-hardening.sql` creates a **Family** leaderboard
 group containing every existing user, so the leaderboard looks the same as
@@ -141,7 +152,8 @@ instead of onboarding.
 3. Athlete → **Account** → *Coach* card → **Accept** (or Decline).
 4. Coach taps the athlete → schedule (upcoming + recent, read-only) → a
    workout → each exercise shows the prescription, what the athlete logged
-   (sets, RPE, "felt off") and a **Demo media** manager.
+   (sets, RPE, the athlete's notes — pain notes highlighted) and a **Demo
+   media** manager.
 5. Either side can end it (coach: *End* on the athlete; athlete: *End
    coaching*). Access to workouts, logs **and** demo media stops immediately.
    A coach can re-invite an ended athlete; they must accept again.
@@ -167,8 +179,9 @@ HEIC photos and HEVC `.mov` videos only display in Safari; the viewer shows
 an "Open" fallback elsewhere. Files are private: the app uses signed URLs
 that expire after an hour.
 
-Deleting a demo in the app also deletes its file. Files whose row was removed
-by a cascade (athlete/workout/exercise deleted) are not auto-deleted —
+Deleting a demo in the app also deletes its file, and so does deleting an
+account in the app (see *Account deletion & App Store*). Files whose row was
+removed by any other cascade (workout/exercise deleted) are not auto-deleted —
 clean them up occasionally in Dashboard → Storage → `exercise-media`
 (folder name = coach's user id).
 
@@ -228,6 +241,51 @@ The function rejects requests that aren't from a signed-in user (401).
 Optionally override the model with `supabase secrets set ANTHROPIC_MODEL=<model id>`.
 
 4. Restart `npm run dev` and open the app. With no `scheduled_workouts` for your user, the onboarding form appears, calls the Edge Function, and writes **week 1** into `workouts` / `scheduled_workouts` / `workout_exercises`. Later weeks are generated adaptively from logs (RPE, completion, pain flags) via **Generate next week** on the calendar.
+
+### Account deletion & App Store
+
+Account → **Delete account** (also on the onboarding screen) → type `DELETE`
+→ **Delete my account**. It calls the `delete-account` Edge Function, which
+checks the caller's JWT, removes their files from the `exercise-media`
+bucket, then hard-deletes the auth user; the database rows go with it.
+
+**Deploy**
+1. Run `supabase/2026-11-account-deletion.sql` (and re-run
+   `2026-11-notes-and-editing.sql` first if you ran it before pulling). A
+   `WARNING` in the output names any foreign key to a user it doesn't know
+   about — that one would still block deletion.
+2. `supabase functions deploy delete-account` (no secrets to set:
+   `SUPABASE_SERVICE_ROLE_KEY` is provided to Edge Functions automatically).
+3. Test with a throwaway account; check Dashboard → Authentication that the
+   user is gone and Storage → `exercise-media` has no folder for them.
+
+**What gets deleted:** profile, program/workouts, scheduled days, logs and
+splits, exercise notes, coach links (both sides), leaderboard memberships
+(and groups left with no other member), templates, the coach's demo media
+rows and files, and media other coaches attached to the user's own workouts.
+**Kept, de-identified:** a coach's custom exercises still used in someone
+else's workout or template stay (owner cleared) so that history keeps its
+names — they then appear in everyone's exercise library; unused ones are
+deleted. Workouts a deleted coach built stay with the athlete and become
+athlete-owned (editable). Leaderboard groups the user created stay for the
+other members. `proposed_substitutions` / `substitutions` hold no user data.
+
+**App Store checklist**
+- [x] In-app account deletion of the account and its data (5.1.1(v)) — not
+      just deactivation; works on the onboarding screen too, so a reviewer
+      doesn't have to generate a program first.
+- [ ] Privacy policy URL: set `VITE_PRIVACY_POLICY_URL` (shows a link in
+      Account) and enter the same URL in App Store Connect.
+- [x] Sign in with Apple not required: email/password only, no third-party
+      login.
+- [ ] App Privacy ("nutrition label") in App Store Connect: email, fitness
+      data (workouts, logs, notes, body weight, age), photos/videos (coaches).
+- [ ] Programs are generated by sending the user's answers and logs to
+      Anthropic: say so in the privacy policy and App Privacy answers, and
+      check guideline 5.1.2 on sharing personal data with third-party AI
+      (it asks for clear disclosure and permission).
+- [ ] Demo account for App Review in App Store Connect (and a coach account
+      if you want coach mode reviewed).
 
 ### Auth
 

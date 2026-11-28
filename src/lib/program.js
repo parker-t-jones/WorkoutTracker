@@ -13,6 +13,7 @@ import {
   mondayAfterLastScheduled,
   filterScheduledForCalendar,
   filterScheduledToHorizon,
+  filterScheduledForHistory,
   resolvePainSubstitutions,
 } from './adapt'
 
@@ -27,7 +28,7 @@ function assertSupabase() {
   return supabase
 }
 
-/** Load calendar data for the signed-in auth user. */
+/** Load calendar data for a target user (self, or an athlete the coach can access). */
 export async function loadProgramData(userId) {
   const client = assertSupabase()
   if (!userId) {
@@ -443,9 +444,23 @@ async function fetchSubstitutionsByPrimaryIds(exerciseIds) {
   return byPrimary
 }
 
+const ACTIVE_COACH_SKIP = 'skipped: athlete has active coach'
+
+async function athleteHasActiveCoach(userId) {
+  const client = assertSupabase()
+  const { count, error } = await client
+    .from('coach_athletes')
+    .select('id', { count: 'exact', head: true })
+    .eq('athlete_id', userId)
+    .eq('status', 'active')
+  if (error) throw error
+  return (count ?? 0) > 0
+}
+
 /**
  * Adaptive next week from prior-week logs. Does not mutate existing weeks.
- * Returns { weekNumber, decisions }.
+ * Returns { weekNumber, decisions }, or { skipped, reason } when a coach
+ * currently owns this athlete's programming.
  */
 export async function generateAndSaveNextWeek({
   userId,
@@ -455,6 +470,13 @@ export async function generateAndSaveNextWeek({
   logs,
 }) {
   if (!userId) throw new Error('Not signed in')
+
+  // Coach-managed athletes must not get automatic adaptive weeks.
+  // Revoked links (status != 'active') do not match, so generation can resume.
+  if (await athleteHasActiveCoach(userId)) {
+    console.info(ACTIVE_COACH_SKIP)
+    return { skipped: true, reason: ACTIVE_COACH_SKIP }
+  }
 
   const workoutsById = Object.fromEntries(
     (workouts ?? []).map((w) => [w.id, w]),
@@ -586,4 +608,5 @@ export {
   canGenerateNextWeek,
   filterScheduledForCalendar,
   filterScheduledToHorizon,
+  filterScheduledForHistory,
 }

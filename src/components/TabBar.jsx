@@ -1,7 +1,8 @@
-import { Calendar, TrendingUp, Trophy, User } from 'lucide-react'
+import { Calendar, Clock, TrendingUp, Trophy, User } from 'lucide-react'
 
 const DEFAULT_TABS = [
   { id: 'calendar', label: 'Calendar', Icon: Calendar },
+  { id: 'history', label: 'History', Icon: Clock },
   { id: 'progress', label: 'Progress', Icon: TrendingUp },
   { id: 'leaderboard', label: 'Leaderboard', Icon: Trophy },
   { id: 'account', label: 'Account', Icon: User },

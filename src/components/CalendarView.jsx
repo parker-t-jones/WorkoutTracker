@@ -52,12 +52,21 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export default function CalendarView({
   scheduledWorkouts,
+  gridWorkouts,
   getWorkout,
   onSelectScheduled,
+  onSelectDay,
+  writable = false,
+  onOpenHistory,
   canGenerateNextWeek = false,
+  coachManagesTraining = false,
   onGenerateNextWeek,
   generatingNextWeek = false,
   generateNextWeekError = null,
+  onBack,
+  backLabel = '← Back to roster',
+  eyebrow,
+  hint,
 }) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -78,8 +87,9 @@ export default function CalendarView({
     return () => clearInterval(id)
   }, [generatingNextWeek])
 
+  const gridItems = gridWorkouts ?? scheduledWorkouts
   const byDate = Object.fromEntries(
-    scheduledWorkouts.map((sw) => [sw.date, sw]),
+    gridItems.map((sw) => [sw.date, sw]),
   )
 
   const cells = []
@@ -102,16 +112,28 @@ export default function CalendarView({
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-4 text-sm text-muted hover:text-ink"
+        >
+          {backLabel}
+        </button>
+      ) : null}
       <header className="mb-6">
-        <p className="text-sm text-muted">This week</p>
+        <p className="text-sm text-muted">{eyebrow ?? 'This week'}</p>
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           {monthLabel}
         </h1>
+        {hint ? <p className="mt-2 text-sm text-muted">{hint}</p> : null}
       </header>
 
       {canGenerateNextWeek || generatingNextWeek ? (
         <div className="mb-6 rounded border border-orange-dim/40 bg-surface px-3 py-3">
-          {generatingNextWeek ? (
+          {coachManagesTraining ? (
+            <p className="text-sm text-ink">Your coach manages your training</p>
+          ) : generatingNextWeek ? (
             <div
               role="status"
               aria-live="polite"
@@ -167,13 +189,17 @@ export default function CalendarView({
           const sw = cell.scheduled
           const workout = sw ? getWorkout(sw.workout_id) : null
           const done = sw?.status === 'completed'
+          const canOpen = Boolean(sw) || (writable && onSelectDay)
 
           return (
             <button
               key={cell.key}
               type="button"
-              disabled={!sw}
-              onClick={() => sw && onSelectScheduled(sw.id)}
+              disabled={!canOpen}
+              onClick={() => {
+                if (sw) onSelectScheduled(sw.id)
+                else if (writable && onSelectDay) onSelectDay(cell.dateKey)
+              }}
               className={[
                 'flex aspect-square flex-col items-start rounded border-[1.5px] p-1.5 text-left text-sm transition',
                 cell.isToday ? 'ring-2 ring-orange ring-offset-1 ring-offset-bg' : '',
@@ -181,26 +207,47 @@ export default function CalendarView({
                   ? done
                     ? 'border-orange/20 bg-surface text-ink hover:border-orange/35'
                     : 'border-orange bg-surface text-ink hover:border-orange-dim'
-                  : 'border-transparent bg-transparent text-muted',
+                  : writable
+                    ? 'border-dashed border-orange-dim/35 bg-transparent text-muted hover:border-orange/50 hover:text-ink'
+                    : 'border-transparent bg-transparent text-muted',
               ].join(' ')}
             >
               <span className="font-display font-medium">{cell.day}</span>
-              {workout && (
+              {workout ? (
                 <span className="mt-auto line-clamp-2 font-display text-[10px] leading-tight text-muted">
                   {workout.focus}
                 </span>
-              )}
+              ) : writable ? (
+                <span className="mt-auto font-display text-[10px] leading-tight text-muted">
+                  +
+                </span>
+              ) : null}
             </button>
           )
         })}
       </div>
 
       <ul className="mt-8 space-y-2">
-        <li className="font-display text-sm font-medium text-muted">
-          Upcoming
+        <li className="flex items-baseline justify-between gap-3">
+          <span className="font-display text-sm font-medium text-muted">
+            Upcoming
+          </span>
+          {onOpenHistory ? (
+            <button
+              type="button"
+              onClick={onOpenHistory}
+              className="text-sm text-muted hover:text-ink"
+            >
+              History
+            </button>
+          ) : null}
         </li>
         {scheduledWorkouts.length === 0 ? (
-          <li className="text-sm text-muted">No workouts in this window.</li>
+          <li className="text-sm text-muted">
+            {writable
+              ? 'No workouts yet. Tap a day to assign one.'
+              : 'No workouts in this window.'}
+          </li>
         ) : null}
         {scheduledWorkouts
           .slice()

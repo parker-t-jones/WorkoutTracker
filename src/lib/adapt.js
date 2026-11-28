@@ -299,6 +299,18 @@ export function filterScheduledForCalendar(scheduledWorkouts, from = new Date())
     .sort((a, b) => a.date.localeCompare(b.date))
 }
 
+/**
+ * History window: everything before the current calendar week (Monday).
+ * Complements filterScheduledForCalendar so Upcoming and History do not overlap.
+ */
+export function filterScheduledForHistory(scheduledWorkouts, from = new Date()) {
+  const startKey = toDateKey(startOfWeekMonday(from))
+  return (scheduledWorkouts ?? [])
+    .filter((sw) => sw.date < startKey)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date))
+}
+
 /** @deprecated use filterScheduledForCalendar — kept as alias */
 export function filterScheduledToHorizon(scheduledWorkouts, from = new Date()) {
   return filterScheduledForCalendar(scheduledWorkouts, from)

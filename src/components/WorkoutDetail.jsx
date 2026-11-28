@@ -48,11 +48,14 @@ export default function WorkoutDetail({
   logs,
   logSplits = [],
   onBack,
+  backLabel = '← Calendar',
   onLogExercise,
   onSavePain,
   savingPainId,
   justCompleted,
   error,
+  readOnly = false,
+  onEdit,
 }) {
   const { workout, exercises, date, status } = scheduled
   const [painOpenId, setPainOpenId] = useState(null)
@@ -96,7 +99,7 @@ export default function WorkoutDetail({
         onClick={onBack}
         className="mb-4 text-sm text-muted hover:text-ink"
       >
-        ← Calendar
+        {backLabel}
       </button>
 
       <header className="mb-6">
@@ -109,11 +112,22 @@ export default function WorkoutDetail({
         <p className="mt-2 font-mono text-xs text-muted">
           {doneUnits}/{totalUnits} logged
         </p>
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="mt-3 w-full rounded border border-orange-dim/40 bg-surface py-2.5 text-sm font-medium text-ink hover:border-orange"
+          >
+            Edit workout
+          </button>
+        ) : null}
       </header>
 
       {(justCompleted || allDone) && (
         <p className="mb-4 rounded border border-success-border/55 bg-surface-alt px-3 py-3 text-sm text-success">
-          Workout complete — nice work. Tap any item to edit.
+          {readOnly
+            ? 'Workout complete.'
+            : 'Workout complete — nice work. Tap any item to edit.'}
         </p>
       )}
 
@@ -171,52 +185,101 @@ export default function WorkoutDetail({
                       </div>
                       {!cardio ? (
                         <div className="flex flex-wrap gap-1.5">
-                          {logged.slice(0, we.sets).map((l) => (
-                            <button
-                              key={l.id}
-                              type="button"
-                              onClick={() =>
-                                onLogExercise(we.id, { editLogId: l.id })
-                              }
-                              className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success hover:border-success-border hover:text-ink"
-                              aria-label={`Edit set ${l.set_number}`}
-                            >
-                              #{l.set_number}: {l.actual_reps}
-                              {l.actual_weight != null
-                                ? `x${l.actual_weight}`
-                                : ''}
-                            </button>
-                          ))}
+                          {logged.slice(0, we.sets).map((l) => {
+                            const label = `#${l.set_number}: ${l.actual_reps}${
+                              l.actual_weight != null ? `x${l.actual_weight}` : ''
+                            }`
+                            const chipClass =
+                              'rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success'
+                            if (readOnly) {
+                              return (
+                                <span key={l.id} className={chipClass}>
+                                  {label}
+                                </span>
+                              )
+                            }
+                            return (
+                              <button
+                                key={l.id}
+                                type="button"
+                                onClick={() =>
+                                  onLogExercise(we.id, { editLogId: l.id })
+                                }
+                                className={`${chipClass} hover:border-success-border hover:text-ink`}
+                                aria-label={`Edit set ${l.set_number}`}
+                              >
+                                {label}
+                              </button>
+                            )
+                          })}
                         </div>
                       ) : we.is_interval ? (
                         <div className="flex flex-wrap gap-1.5">
-                          {splits.map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              onClick={() => onLogExercise(we.id)}
-                              className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
-                            >
-                              #{s.split_number}
-                              {s.pace ? `: ${s.pace}` : ''}
-                            </button>
-                          ))}
+                          {splits.map((s) => {
+                            const label = `#${s.split_number}${s.pace ? `: ${s.pace}` : ''}`
+                            const chipClass =
+                              'rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success'
+                            if (readOnly) {
+                              return (
+                                <span key={s.id} className={chipClass}>
+                                  {label}
+                                </span>
+                              )
+                            }
+                            return (
+                              <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => onLogExercise(we.id)}
+                                className={chipClass}
+                              >
+                                {label}
+                              </button>
+                            )
+                          })}
                         </div>
                       ) : logged[0] ? (
-                        <button
-                          type="button"
-                          onClick={() => onLogExercise(we.id)}
-                          className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
-                        >
-                          {logged[0].actual_duration_seconds != null
-                            ? formatDuration(logged[0].actual_duration_seconds)
-                            : '—'}
-                          {logged[0].actual_distance != null
-                            ? ` · ${formatDistance(logged[0].actual_distance, logged[0].distance_unit || 'mi')}`
-                            : ''}
-                        </button>
+                        readOnly ? (
+                          <span className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success">
+                            {logged[0].actual_duration_seconds != null
+                              ? formatDuration(logged[0].actual_duration_seconds)
+                              : '—'}
+                            {logged[0].actual_distance != null
+                              ? ` · ${formatDistance(logged[0].actual_distance, logged[0].distance_unit || 'mi')}`
+                              : ''}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onLogExercise(we.id)}
+                            className="rounded border border-success-border/55 bg-surface-alt px-2 py-1 font-mono text-xs tabular-nums text-success"
+                          >
+                            {logged[0].actual_duration_seconds != null
+                              ? formatDuration(logged[0].actual_duration_seconds)
+                              : '—'}
+                            {logged[0].actual_distance != null
+                              ? ` · ${formatDistance(logged[0].actual_distance, logged[0].distance_unit || 'mi')}`
+                              : ''}
+                          </button>
+                        )
                       ) : null}
-                      {exerciseDone ? (
+                      {exerciseDone && rpe != null ? (
+                        readOnly ? (
+                          <span className="block text-xs text-muted">
+                            RPE {rpe}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onLogExercise(we.id, { showRpe: true })
+                            }
+                            className="text-xs text-muted hover:text-ink"
+                          >
+                            RPE {rpe} · tap to change
+                          </button>
+                        )
+                      ) : exerciseDone && !readOnly ? (
                         <button
                           type="button"
                           onClick={() =>
@@ -224,9 +287,7 @@ export default function WorkoutDetail({
                           }
                           className="text-xs text-muted hover:text-ink"
                         >
-                          {rpe != null
-                            ? `RPE ${rpe} · tap to change`
-                            : 'Add RPE'}
+                          Add RPE
                         </button>
                       ) : null}
                       {hasPain ? (
@@ -240,38 +301,40 @@ export default function WorkoutDetail({
                     </div>
                   )}
                 </div>
-                <div className="flex w-[5.75rem] shrink-0 flex-col items-stretch gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onLogExercise(we.id)}
-                    className="rounded bg-orange px-3 py-1.5 text-sm font-medium text-on-orange hover:bg-orange-dim"
-                  >
-                    {exerciseDone ? 'Edit' : done > 0 ? 'Continue' : 'Log'}
-                  </button>
-                  {exerciseDone ? (
+                {!readOnly ? (
+                  <div className="flex w-[5.75rem] shrink-0 flex-col items-stretch gap-2">
                     <button
                       type="button"
-                      onClick={() =>
-                        painOpen ? closePain() : openPain(we.id)
-                      }
-                      className={[
-                        'rounded px-2 py-1.5 text-center text-xs font-medium',
-                        hasPain || painOpen
-                          ? 'bg-ink/15 text-ink ring-1 ring-ink/20'
-                          : 'bg-ink/10 text-muted hover:bg-ink/15 hover:text-ink',
-                      ].join(' ')}
-                      aria-expanded={painOpen}
-                      aria-label={
-                        hasPain ? 'Edit felt-off note' : 'Flag if this felt off'
-                      }
+                      onClick={() => onLogExercise(we.id)}
+                      className="rounded bg-orange px-3 py-1.5 text-sm font-medium text-on-orange hover:bg-orange-dim"
                     >
-                      {hasPain ? 'Felt off ✓' : 'Felt off?'}
+                      {exerciseDone ? 'Edit' : done > 0 ? 'Continue' : 'Log'}
                     </button>
-                  ) : null}
-                </div>
+                    {exerciseDone ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          painOpen ? closePain() : openPain(we.id)
+                        }
+                        className={[
+                          'rounded px-2 py-1.5 text-center text-xs font-medium',
+                          hasPain || painOpen
+                            ? 'bg-ink/15 text-ink ring-1 ring-ink/20'
+                            : 'bg-ink/10 text-muted hover:bg-ink/15 hover:text-ink',
+                        ].join(' ')}
+                        aria-expanded={painOpen}
+                        aria-label={
+                          hasPain ? 'Edit felt-off note' : 'Flag if this felt off'
+                        }
+                      >
+                        {hasPain ? 'Felt off ✓' : 'Felt off?'}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
-              {painOpen ? (
+              {!readOnly && painOpen ? (
                 <div className="mt-3 space-y-2 border-t border-orange-dim/30 pt-3">
                   <p className="text-xs text-muted">
                     Optional — note where or what felt off. Not medical advice,

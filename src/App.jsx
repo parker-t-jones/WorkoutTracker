@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Calendar, TrendingUp, Trophy, User, Users } from 'lucide-react'
+import { Calendar, Clock, TrendingUp, Trophy, User, Users } from 'lucide-react'
 import CalendarView from './components/CalendarView'
+import HistoryView from './components/HistoryView'
 import WorkoutDetail from './components/WorkoutDetail'
 import LogSet from './components/LogSet'
 import LogCardio from './components/LogCardio'
@@ -45,6 +46,7 @@ import {
 
 const TRAINING_TABS = [
   { id: 'calendar', label: 'Calendar', Icon: Calendar },
+  { id: 'history', label: 'History', Icon: Clock },
   { id: 'progress', label: 'Progress', Icon: TrendingUp },
   { id: 'leaderboard', label: 'Leaderboard', Icon: Trophy },
   { id: 'account', label: 'Account', Icon: User },
@@ -77,13 +79,15 @@ export default function App() {
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
 
-  const [view, setView] = useState('calendar') // calendar | progress | leaderboard | account | athletes | workout | log | week-summary | proposals
+  const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | athletes | workout | log | week-summary | proposals
+  const [workoutSource, setWorkoutSource] = useState('calendar') // calendar | history
   const [intendedRole, setIntendedRoleState] = useState(() => getIntendedRole())
   const [isCoach, setIsCoach] = useState(false)
   const [hasActiveCoach, setHasActiveCoach] = useState(false)
   const [appMode, setAppMode] = useState('training') // training | coaching
   const [coachDenied, setCoachDenied] = useState(false)
   const roleRoutedRef = useRef(false)
+  const [rosterNonce, setRosterNonce] = useState(0)
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
   const [editLogId, setEditLogId] = useState(null)
@@ -205,6 +209,7 @@ export default function App() {
         setLogSplits([])
         setNeedsOnboarding(false)
         setView('calendar')
+        setWorkoutSource('calendar')
         setAuthScreenMode('login')
         setPasswordRecovery(false)
         setIntendedRoleState(null)
@@ -213,6 +218,7 @@ export default function App() {
         setAppMode('training')
         setCoachDenied(false)
         roleRoutedRef.current = false
+        setRosterNonce(0)
         clearIntendedRole()
         clearStoredAppMode()
         setBootstrapping(false)
@@ -248,6 +254,10 @@ export default function App() {
 
   async function handleGenerateNextWeek() {
     if (generatingNextWeekRef.current || !userId) return
+    if (hasActiveCoach) {
+      console.info('skipped: athlete has active coach')
+      return
+    }
     generatingNextWeekRef.current = true
     setGeneratingNextWeek(true)
     setNextWeekError(null)
@@ -260,6 +270,10 @@ export default function App() {
         workoutDetails,
         logs,
       })
+
+      if (result?.skipped) {
+        return
+      }
 
       // Always reload calendar data after insert — don't rely on pre-generate state.
       const data = await loadProgramData(userId)
@@ -314,6 +328,7 @@ export default function App() {
     setEditLogId(null)
     setLogShowRpe(false)
     setJustCompleted(false)
+    setWorkoutSource('calendar')
     if (next === 'coaching') {
       setView((v) => (v === 'account' ? 'account' : 'athletes'))
     } else {
@@ -337,13 +352,14 @@ export default function App() {
     }
   }
 
-  function openWorkout(id) {
+  function openWorkout(id, source = 'calendar') {
     setScheduledId(id)
     setWorkoutExerciseId(null)
     setEditLogId(null)
     setLogShowRpe(false)
     setJustCompleted(false)
     setLogError(null)
+    setWorkoutSource(source === 'history' ? 'history' : 'calendar')
     setView('workout')
   }
 
@@ -356,7 +372,7 @@ export default function App() {
   }
 
   function backToCalendar() {
-    setView('calendar')
+    setView(workoutSource === 'history' ? 'history' : 'calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -730,6 +746,7 @@ export default function App() {
         logs={logs}
         logSplits={logSplits}
         onBack={backToCalendar}
+        backLabel={workoutSource === 'history' ? '← History' : '← Calendar'}
         onLogExercise={openLog}
         onSavePain={handleSavePain}
         savingPainId={savingPainId}
@@ -740,6 +757,9 @@ export default function App() {
   }
 
   const coaching = isCoach && appMode === 'coaching'
+  const fromHistory =
+    view === 'history' ||
+    ((view === 'workout' || view === 'log') && workoutSource === 'history')
   const topTab = coaching
     ? view === 'account'
       ? 'account'
@@ -750,7 +770,9 @@ export default function App() {
         ? 'leaderboard'
         : view === 'account'
           ? 'account'
-          : 'calendar'
+          : fromHistory
+            ? 'history'
+            : 'calendar'
 
   return (
     <>
@@ -766,7 +788,7 @@ export default function App() {
               onOpenProposals={() => setView('proposals')}
             />
           ) : (
-            <AthletesView />
+            <AthletesView coachId={session.user.id} rosterNonce={rosterNonce} />
           )
         ) : view === 'progress' ? (
           <ProgressView
@@ -782,12 +804,24 @@ export default function App() {
             onSignOut={handleSignOut}
             onOpenProposals={() => setView('proposals')}
           />
+        ) : view === 'history' ? (
+          <HistoryView
+            scheduledWorkouts={scheduledWorkouts}
+            getWorkout={getWorkout}
+            workoutDetails={workoutDetails}
+            onSelectScheduled={(id) => openWorkout(id, 'history')}
+          />
         ) : (
           <CalendarView
             scheduledWorkouts={calendarScheduled}
             getWorkout={getWorkout}
             onSelectScheduled={openWorkout}
+            onOpenHistory={() => {
+              setWorkoutSource('history')
+              setView('history')
+            }}
             canGenerateNextWeek={nextWeekEligibility.ready}
+            coachManagesTraining={hasActiveCoach}
             onGenerateNextWeek={handleGenerateNextWeek}
             generatingNextWeek={generatingNextWeek}
             generateNextWeekError={nextWeekError}
@@ -804,6 +838,8 @@ export default function App() {
           setEditLogId(null)
           setLogShowRpe(false)
           setJustCompleted(false)
+          setWorkoutSource(tab === 'history' ? 'history' : 'calendar')
+          if (tab === 'athletes') setRosterNonce((n) => n + 1)
         }}
       />
     </>

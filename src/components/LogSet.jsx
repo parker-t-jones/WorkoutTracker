@@ -1,8 +1,19 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import {
   parsePrescribedReps,
   isBodyweightGuidance,
 } from '../lib/logging'
+import { getWeightUnit, roundWeight } from '../lib/units'
+import { dumbbellInfo, parseGuidanceWeight } from '../lib/equipment'
+import { logE1rm, logWeightIn, previousPerformance } from '../lib/progress'
+import {
+  DEFAULT_REST_SECONDS,
+  adjustRestTimer,
+  parseRestSeconds,
+  readRestTimer,
+  startRestTimer,
+  writeRestTimer,
+} from '../lib/rest'
 
 function Stepper({ label, value, onChange, step = 1, min = 0, suffix = '' }) {
   return (
@@ -46,15 +57,194 @@ function roundToStep(n, step) {
   return Number(rounded.toFixed(precision))
 }
 
-function defaultWeight(workoutExercise, existingLogs) {
+/** Weight of a log in the display unit, rounded; null when unweighted. */
+function displayWeight(log, unit) {
+  const w = logWeightIn(log, unit)
+  return w == null ? null : roundWeight(w)
+}
+
+/**
+ * Default weight for the next set (per dumbbell for dumbbell lifts): today's
+ * latest weighted set, else last session's first weighted set, else the
+ * number in the prescription ("~45-50 lb dumbbells per hand" → 45), else 0
+ * for bodyweight, else a barbell guess.
+ */
+function defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell) {
   const sorted = existingLogs
     .slice()
     .sort((a, b) => b.set_number - a.set_number)
   const lastWithWeight = sorted.find((l) => l.actual_weight != null)
-  if (lastWithWeight) return Number(lastWithWeight.actual_weight)
+  if (lastWithWeight) return displayWeight(lastWithWeight, unit)
+
+  const lastFirst = lastSession?.logs.find((l) => l.actual_weight != null)
+  if (lastFirst) return displayWeight(lastFirst, unit)
+
+  const prescribed = parseGuidanceWeight(workoutExercise.weight_guidance, unit, {
+    perHand: isDumbbell,
+  })
+  if (prescribed != null) return prescribed
 
   if (isBodyweightGuidance(workoutExercise.weight_guidance)) return 0
-  return 135
+  return unit === 'kg' ? 60 : 135
+}
+
+// Dumbbell lifts: the field can take one dumbbell ("each") or both together
+// ("total"); storage is always per dumbbell. Remembered per device.
+const DUMBBELL_ENTRY_KEY = 'wt-dumbbell-entry'
+
+function readDumbbellEntryMode() {
+  try {
+    return localStorage.getItem(DUMBBELL_ENTRY_KEY) === 'total' ? 'total' : 'each'
+  } catch {
+    return 'each'
+  }
+}
+
+function writeDumbbellEntryMode(mode) {
+  try {
+    localStorage.setItem(DUMBBELL_ENTRY_KEY, mode)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Field text for a per-dumbbell weight in the current entry mode. */
+function entryText(perDumbbell, totalMode) {
+  if (perDumbbell == null) return '0'
+  return String(totalMode ? roundWeight(perDumbbell * 2) : perDumbbell)
+}
+
+function formatShortDate(dateKey) {
+  if (!dateKey) return ''
+  const [y, m, d] = String(dateKey).split('-').map(Number)
+  if (!y || !m || !d) return ''
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function formatLastSession(lastSession, unit, each = false) {
+  if (!lastSession?.logs.length) return null
+  let weighted = false
+  const sets = lastSession.logs.map((l) => {
+    const w = displayWeight(l, unit)
+    const reps = Number(l.actual_reps) || 0
+    if (w != null && w > 0) {
+      weighted = true
+      return `${w}×${reps}`
+    }
+    return `BW×${reps}`
+  })
+  const date = formatShortDate(lastSession.date)
+  const suffix = weighted ? ` ${unit}${each ? ' each' : ''}` : ''
+  return `Last: ${sets.join(', ')}${suffix}${date ? ` · ${date}` : ''}`
+}
+
+function formatClock(totalSeconds) {
+  const s = Math.max(0, Math.ceil(totalSeconds))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** Rest countdown stored as an end timestamp (see lib/rest.js). */
+function useRestTimer() {
+  const [timer, setTimer] = useState(() => readRestTimer())
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!timer) return
+    const id = setInterval(() => setNow(Date.now()), 250)
+    function onVisible() {
+      setNow(Date.now())
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [timer])
+
+  const remaining = timer ? (timer.endAt - now) / 1000 : null
+
+  // Vibrate once at zero; auto-dismiss a while after it ends.
+  useEffect(() => {
+    if (!timer || remaining == null || remaining > 0) return
+    if (!timer.fired) {
+      try {
+        navigator.vibrate?.([200, 100, 200])
+      } catch {
+        /* unsupported */
+      }
+      setTimer(writeRestTimer({ ...timer, fired: true }))
+    }
+    if (remaining < -10) setTimer(writeRestTimer(null))
+  }, [timer, remaining])
+
+  return {
+    timer,
+    remaining,
+    start(seconds) {
+      setNow(Date.now())
+      setTimer(startRestTimer(seconds))
+    },
+    adjust(delta) {
+      setNow(Date.now())
+      setTimer(adjustRestTimer(timer, delta))
+    },
+    skip() {
+      setTimer(writeRestTimer(null))
+    },
+  }
+}
+
+function RestTimerBar({ remaining, onAdjust, onSkip }) {
+  const over = remaining <= 0
+  return (
+    <div
+      className="mb-4 flex items-center gap-2 rounded border border-orange-dim/40 bg-surface-alt px-3 py-2"
+      role="timer"
+      aria-live="polite"
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-xs text-muted">{over ? 'Rest over' : 'Rest'}</div>
+        <div
+          className={[
+            'font-mono text-xl font-medium tabular-nums',
+            over ? 'text-success' : 'text-ink',
+          ].join(' ')}
+        >
+          {over ? 'Go' : formatClock(remaining)}
+        </div>
+      </div>
+      {!over ? (
+        <>
+          <button
+            type="button"
+            onClick={() => onAdjust(-15)}
+            className="h-11 min-w-11 rounded bg-surface px-2 font-mono text-sm text-ink ring-1 ring-orange-dim/40 active:bg-orange-dim/40"
+            aria-label="Subtract 15 seconds"
+          >
+            −15
+          </button>
+          <button
+            type="button"
+            onClick={() => onAdjust(15)}
+            className="h-11 min-w-11 rounded bg-surface px-2 font-mono text-sm text-ink ring-1 ring-orange-dim/40 active:bg-orange-dim/40"
+            aria-label="Add 15 seconds"
+          >
+            +15
+          </button>
+        </>
+      ) : null}
+      <button
+        type="button"
+        onClick={onSkip}
+        className="h-11 rounded px-3 text-sm text-muted hover:text-ink"
+      >
+        {over ? 'Dismiss' : 'Skip'}
+      </button>
+    </div>
+  )
 }
 
 /** Digits + at most one decimal point; no negatives or other characters. */
@@ -134,6 +324,37 @@ function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
   )
 }
 
+function DumbbellModeToggle({ mode, onChange }) {
+  return (
+    <div
+      role="group"
+      aria-label="Enter weight per dumbbell or total"
+      className="flex shrink-0 rounded bg-surface-alt p-0.5 ring-1 ring-orange-dim/40"
+    >
+      {[
+        ['each', 'Each'],
+        ['total', 'Total'],
+      ].map(([value, label]) => {
+        const selected = mode === value
+        return (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onChange(value)}
+            aria-pressed={selected}
+            className={[
+              'min-h-11 min-w-14 rounded px-3 text-sm font-medium',
+              selected ? 'bg-orange text-on-orange' : 'text-muted hover:text-ink',
+            ].join(' ')}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function SetForm({
   title,
   reps,
@@ -145,7 +366,15 @@ function SetForm({
   primaryLabel,
   onPrimary,
   onCancel,
+  onDelete,
+  unit = 'lb',
+  // { mode: 'each'|'total', single, onModeChange, perDumbbellText } for
+  // dumbbell lifts; null otherwise.
+  dumbbell = null,
 }) {
+  const totalMode = dumbbell && !dumbbell.single && dumbbell.mode === 'total'
+  const pair = dumbbell && !dumbbell.single
+  const suffix = pair ? `${unit} ${totalMode ? 'total' : 'each'}` : unit
   return (
     <div className="space-y-6">
       {title ? (
@@ -155,9 +384,20 @@ function SetForm({
       <Stepper label="Reps" value={reps} onChange={setReps} step={1} min={0} />
 
       <div>
-        <label htmlFor="log-weight" className="mb-2 block text-sm font-medium">
-          Weight
-        </label>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label htmlFor="log-weight" className="block text-sm font-medium">
+            {pair
+              ? totalMode
+                ? 'Total weight'
+                : 'Weight per dumbbell'
+              : dumbbell
+                ? 'Dumbbell weight'
+                : 'Weight'}
+          </label>
+          {pair ? (
+            <DumbbellModeToggle mode={dumbbell.mode} onChange={dumbbell.onModeChange} />
+          ) : null}
+        </div>
         <div className="relative">
           <input
             id="log-weight"
@@ -168,13 +408,28 @@ function SetForm({
             value={weightText}
             onChange={(e) => setWeightText(sanitizeWeightInput(e.target.value))}
             onFocus={(e) => e.target.select()}
-            className="h-14 w-full rounded border border-orange-dim/50 bg-surface px-4 pr-12 text-center font-display text-3xl font-semibold tabular-nums text-ink focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
-            aria-label="Weight in pounds"
+            className={[
+              'h-14 w-full rounded border border-orange-dim/50 bg-surface px-4 text-center font-display text-3xl font-semibold tabular-nums text-ink focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange',
+              pair ? 'pl-24 pr-24' : 'pr-12',
+            ].join(' ')}
+            aria-label={`${
+              dumbbell ? (totalMode ? 'Total weight of both dumbbells' : 'Weight of one dumbbell') : 'Weight'
+            } in ${unit === 'kg' ? 'kilograms' : 'pounds'}`}
+            aria-describedby={dumbbell ? 'log-weight-help' : undefined}
           />
           <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-lg text-muted">
-            lb
+            {suffix}
           </span>
         </div>
+        {dumbbell ? (
+          <p id="log-weight-help" className="mt-2 text-xs text-muted">
+            {totalMode
+              ? `Both dumbbells together — saved as ${dumbbell.perDumbbellText} ${unit} each`
+              : dumbbell.single
+                ? 'Logging the weight of the dumbbell'
+                : 'Logging the weight of one dumbbell'}
+          </p>
+        ) : null}
       </div>
 
       {error ? (
@@ -202,6 +457,17 @@ function SetForm({
           Cancel
         </button>
       ) : null}
+
+      {onDelete ? (
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={saving}
+          className="w-full rounded border border-danger/40 py-3 text-sm font-medium text-danger hover:bg-danger-bg disabled:opacity-60"
+        >
+          Delete set
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -209,16 +475,51 @@ function SetForm({
 export default function LogSet({
   workoutExercise,
   existingLogs,
+  exerciseHistory = [],
+  weIndex = null,
+  scheduledDate = null,
   onBack,
   onSave,
   onUpdate,
+  onDelete,
   onSaveRpe,
   saving,
   savingRpe,
   error,
   initialEditLogId = null,
   initialShowRpe = false,
+  // Optional node rendered under the exercise header (e.g. coach demo media).
+  headerExtras = null,
 }) {
+  const [unit] = useState(() => getWeightUnit())
+  const rest = useRestTimer()
+  const [prBadge, setPrBadge] = useState(null)
+  const dumbbell = useMemo(() => dumbbellInfo(workoutExercise), [workoutExercise])
+  const isDumbbell = dumbbell.isDumbbell
+  const [dumbbellMode, setDumbbellMode] = useState(() => readDumbbellEntryMode())
+  // Entering the total of both dumbbells (divided by 2 on save).
+  const totalMode = isDumbbell && !dumbbell.single && dumbbellMode === 'total'
+  // "45×8 lb each" — omitted for single-dumbbell lifts (goblet squat).
+  const eachLabel = isDumbbell && !dumbbell.single ? ' each' : ''
+
+  const lastSession = useMemo(
+    () =>
+      weIndex && workoutExercise.exercise_id
+        ? previousPerformance({
+            exerciseId: workoutExercise.exercise_id,
+            currentWorkoutExerciseId: workoutExercise.id,
+            currentDate: scheduledDate,
+            logs: exerciseHistory,
+            index: weIndex,
+          })
+        : null,
+    [weIndex, workoutExercise, scheduledDate, exerciseHistory],
+  )
+  const lastSessionLabel = formatLastSession(lastSession, unit, Boolean(eachLabel))
+  const restSeconds =
+    parseRestSeconds(workoutExercise.weight_guidance, workoutExercise.notes) ??
+    DEFAULT_REST_SECONDS
+
   const prescribedReps = parsePrescribedReps(workoutExercise.reps)
   const loggedCount = existingLogs.length
   const nextSet = loggedCount + 1
@@ -230,7 +531,10 @@ export default function LogSet({
   const [reps, setReps] = useState(prescribedReps)
   // String so the user can clear/type mid-edit (e.g. "12.") without fighting a number.
   const [weightText, setWeightText] = useState(() =>
-    String(defaultWeight(workoutExercise, existingLogs)),
+    entryText(
+      defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell),
+      totalMode,
+    ),
   )
   const [rpe, setRpe] = useState(existingRpe)
   // After first completion prompt is dismissed, keep a compact "edit RPE" affordance.
@@ -246,12 +550,43 @@ export default function LogSet({
 
   // Re-seed defaults only when moving to the next set (after a successful save).
   const prevLoggedCount = useRef(loggedCount)
+  const knownLogIds = useRef(new Set(existingLogs.map((l) => l.id)))
   useEffect(() => {
     if (prevLoggedCount.current === loggedCount) return
+    const added = loggedCount > prevLoggedCount.current
     prevLoggedCount.current = loggedCount
+
+    const newLogs = existingLogs.filter((l) => !knownLogIds.current.has(l.id))
+    knownLogIds.current = new Set(existingLogs.map((l) => l.id))
+
+    if (added && newLogs.length) {
+      // New e1RM PR vs every other logged set of this lift (any workout).
+      const newIds = new Set(newLogs.map((l) => l.id))
+      let priorBest = null
+      for (const l of exerciseHistory) {
+        if (newIds.has(l.id)) continue
+        const e = logE1rm(l, unit)
+        if (e != null && (priorBest == null || e > priorBest)) priorBest = e
+      }
+      let best = null
+      for (const l of newLogs) {
+        const e = logE1rm(l, unit)
+        if (e != null && (best == null || e > best)) best = e
+      }
+      if (best != null && priorBest != null && best > priorBest + 0.05) {
+        setPrBadge(`New PR · est. 1RM ${roundWeight(best)} ${unit}${eachLabel}`)
+      }
+      if (!done) rest.start(restSeconds)
+    }
+
     if (done || editingLogId) return
     setReps(prescribedReps)
-    setWeightText(String(defaultWeight(workoutExercise, existingLogs)))
+    setWeightText(
+      entryText(
+        defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell),
+        totalMode,
+      ),
+    )
     if (loggedCount >= workoutExercise.sets && existingRpe == null) {
       setRpePromptOpen(true)
     }
@@ -261,46 +596,87 @@ export default function LogSet({
     prescribedReps,
     workoutExercise,
     existingLogs,
+    exerciseHistory,
+    lastSession,
+    unit,
     editingLogId,
     existingRpe,
+    rest,
+    restSeconds,
+    isDumbbell,
+    totalMode,
+    eachLabel,
   ])
+
+  useEffect(() => {
+    if (!prBadge) return
+    const id = setTimeout(() => setPrBadge(null), 6000)
+    return () => clearTimeout(id)
+  }, [prBadge])
 
   useEffect(() => {
     setRpe(existingRpe)
   }, [existingRpe])
 
-  // Load values when entering edit mode for a specific set.
+  // Load values when entering edit mode for a specific set. Only when the
+  // edited set changes — not when the Each/Total toggle flips (that converts
+  // the typed value itself).
+  const editingLogRef = useRef(null)
   useEffect(() => {
-    if (!editingLog) return
+    if (!editingLog || editingLogRef.current === editingLog) return
+    editingLogRef.current = editingLog
     setReps(Number(editingLog.actual_reps) || 0)
-    setWeightText(
-      editingLog.actual_weight != null
-        ? String(editingLog.actual_weight)
-        : '0',
-    )
-  }, [editingLog])
+    setWeightText(entryText(displayWeight(editingLog, unit), totalMode))
+  }, [editingLog, unit, totalMode])
 
   function startEdit(log) {
     setEditingLogId(log.id)
     setRpePromptOpen(false)
     setReps(Number(log.actual_reps) || 0)
-    setWeightText(log.actual_weight != null ? String(log.actual_weight) : '0')
+    setWeightText(entryText(displayWeight(log, unit), totalMode))
   }
 
   function cancelEdit() {
     setEditingLogId(null)
+    editingLogRef.current = null
     if (!done) {
       setReps(prescribedReps)
-      setWeightText(String(defaultWeight(workoutExercise, existingLogs)))
+      setWeightText(
+        entryText(
+          defaultWeight(workoutExercise, existingLogs, lastSession, unit, isDumbbell),
+          totalMode,
+        ),
+      )
     }
   }
+
+  function changeDumbbellMode(next) {
+    if (next === dumbbellMode) return
+    // Keep the same physical load: 45 each ⇄ 90 total.
+    const n = parseWeight(weightText)
+    setWeightText(
+      String(roundWeight(next === 'total' ? n * 2 : n / 2)),
+    )
+    setDumbbellMode(next)
+    writeDumbbellEntryMode(next)
+  }
+
+  /** Weight to store: always one dumbbell for dumbbell lifts. */
+  function storedWeight() {
+    const n = parseWeight(weightText)
+    return totalMode ? n / 2 : n
+  }
+
+  const loadBasis = isDumbbell ? 'per_dumbbell' : null
 
   async function handleSave() {
     if (done || saving || editingLog) return
     await onSave({
       set_number: nextSet,
       actual_reps: reps,
-      actual_weight: parseWeight(weightText),
+      actual_weight: storedWeight(),
+      weight_unit: unit,
+      load_basis: loadBasis,
     })
   }
 
@@ -310,8 +686,24 @@ export default function LogSet({
       await onUpdate({
         log_id: editingLog.id,
         actual_reps: reps,
-        actual_weight: parseWeight(weightText),
+        actual_weight: storedWeight(),
+        weight_unit: unit,
+        load_basis: loadBasis,
       })
+      setEditingLogId(null)
+    } catch {
+      // Parent sets error; stay in edit mode.
+    }
+  }
+
+  async function handleDelete() {
+    if (!editingLog || saving || !onDelete) return
+    const ok = window.confirm(
+      `Delete set ${editingLog.set_number}? Later sets will be renumbered.`,
+    )
+    if (!ok) return
+    try {
+      await onDelete(editingLog.id)
       setEditingLogId(null)
     } catch {
       // Parent sets error; stay in edit mode.
@@ -356,6 +748,15 @@ export default function LogSet({
     .slice()
     .sort((a, b) => a.set_number - b.set_number)
 
+  const dumbbellProp = isDumbbell
+    ? {
+        mode: dumbbellMode,
+        single: dumbbell.single,
+        onModeChange: changeDumbbellMode,
+        perDumbbellText: String(roundWeight(storedWeight())),
+      }
+    : null
+
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
       <button
@@ -384,7 +785,29 @@ export default function LogSet({
         {workoutExercise.notes ? (
           <p className="mt-1 text-sm text-muted">{workoutExercise.notes}</p>
         ) : null}
+        {lastSessionLabel ? (
+          <p className="mt-2 font-mono text-xs text-muted">{lastSessionLabel}</p>
+        ) : null}
       </header>
+
+      {headerExtras}
+
+      {prBadge ? (
+        <p
+          role="status"
+          className="mb-4 rounded border border-success-border/55 bg-surface-alt px-3 py-2 text-sm font-medium text-success"
+        >
+          {prBadge}
+        </p>
+      ) : null}
+
+      {rest.timer && rest.remaining != null && !editingLog ? (
+        <RestTimerBar
+          remaining={rest.remaining}
+          onAdjust={rest.adjust}
+          onSkip={rest.skip}
+        />
+      ) : null}
 
       {sortedLogs.length > 0 && !editingLog && (
         <ul className="mb-6 space-y-1 rounded border border-orange-dim/40 bg-surface px-3 py-2 text-sm">
@@ -398,7 +821,9 @@ export default function LogSet({
                 <span className="font-mono">Set {l.set_number}</span>
                 <span className="font-mono tabular-nums text-ink">
                   {l.actual_reps} reps
-                  {l.actual_weight != null ? ` x ${l.actual_weight}` : ''}
+                  {l.actual_weight != null
+                    ? ` x ${displayWeight(l, unit)} ${unit}${eachLabel}`
+                    : ''}
                   <span className="ml-2 font-sans text-xs text-muted">Edit</span>
                 </span>
               </button>
@@ -419,6 +844,9 @@ export default function LogSet({
           primaryLabel="Save changes"
           onPrimary={handleUpdate}
           onCancel={cancelEdit}
+          onDelete={onDelete ? handleDelete : undefined}
+          unit={unit}
+          dumbbell={dumbbellProp}
         />
       ) : done ? (
         <div className="space-y-3">
@@ -474,6 +902,8 @@ export default function LogSet({
           error={error}
           primaryLabel={`Log set ${nextSet}`}
           onPrimary={handleSave}
+          unit={unit}
+          dumbbell={dumbbellProp}
         />
       )}
     </div>

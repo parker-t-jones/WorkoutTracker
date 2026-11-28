@@ -11,9 +11,29 @@ import {
 import {
   adherenceFor,
   currentWeekRange,
+  personalRecords,
   weightProgressByExercise,
 } from '../lib/progress'
 import { readThemeVars } from '../lib/theme'
+import { getWeightUnit } from '../lib/units'
+
+const METRICS = [
+  { id: 'weight', label: 'Top set', caption: 'Top set (heaviest logged weight) per day' },
+  {
+    id: 'e1rm',
+    label: 'Est. 1RM',
+    caption: 'Best estimated 1RM per day (Epley, sets of 12 reps or fewer)',
+  },
+]
+
+function formatPrDate(dateKey) {
+  const [y, m, d] = dateKey.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: y === new Date().getFullYear() ? undefined : 'numeric',
+  })
+}
 
 function formatShortDate(dateKey) {
   const [, m, d] = dateKey.split('-')
@@ -52,6 +72,8 @@ function useChartColors() {
 
 export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }) {
   const chart = useChartColors()
+  const [unit] = useState(() => getWeightUnit())
+  const [metric, setMetric] = useState('weight')
   const weekStats = useMemo(
     () => adherenceFor(scheduledWorkouts, currentWeekRange()),
     [scheduledWorkouts],
@@ -62,8 +84,12 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
   )
 
   const series = useMemo(
-    () => weightProgressByExercise(logs, workoutDetails),
-    [logs, workoutDetails],
+    () => weightProgressByExercise(logs, workoutDetails, unit),
+    [logs, workoutDetails, unit],
+  )
+  const prs = useMemo(
+    () => personalRecords(logs, workoutDetails, unit),
+    [logs, workoutDetails, unit],
   )
 
   const [selectedId, setSelectedId] = useState(series[0]?.exerciseId ?? '')
@@ -76,6 +102,10 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
 
   const selected =
     series.find((s) => s.exerciseId === selectedId) ?? series[0] ?? null
+  const metricDef = METRICS.find((m) => m.id === metric) ?? METRICS[0]
+  const chartPoints = selected
+    ? selected.points.filter((p) => p[metric] != null)
+    : []
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
@@ -120,11 +150,39 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
               </select>
             </label>
 
-            {selected && (
+            <div className="flex gap-1" role="group" aria-label="Chart metric">
+              {METRICS.map((m) => {
+                const active = m.id === metric
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setMetric(m.id)}
+                    aria-pressed={active}
+                    className={[
+                      'flex-1 rounded py-2 text-sm font-medium',
+                      active
+                        ? 'bg-orange text-on-orange'
+                        : 'bg-surface-alt text-muted ring-1 ring-orange-dim/40 hover:text-ink',
+                    ].join(' ')}
+                  >
+                    {m.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {selected && chartPoints.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted">
+                No sets of 12 reps or fewer to estimate a 1RM yet.
+              </p>
+            ) : null}
+
+            {selected && chartPoints.length > 0 && (
               <div className="h-56 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
-                    data={selected.points}
+                    data={chartPoints}
                     margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
                   >
                     <CartesianGrid
@@ -149,12 +207,12 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
                         borderRadius: 6,
                         color: chart.text,
                       }}
-                      formatter={(value) => [`${value} lb`, 'Top set']}
+                      formatter={(value) => [`${value} ${unit}`, metricDef.label]}
                       labelFormatter={(label) => formatShortDate(label)}
                     />
                     <Line
                       type="monotone"
-                      dataKey="weight"
+                      dataKey={metric}
                       stroke={chart.orange}
                       strokeWidth={2}
                       dot={{ r: 3, fill: chart.orange }}
@@ -165,11 +223,45 @@ export default function ProgressView({ scheduledWorkouts, workoutDetails, logs }
             )}
 
             <p className="text-xs text-muted">
-              Top set (heaviest logged weight) per day
+              {metricDef.caption} · {unit}
             </p>
           </div>
         )}
       </section>
+
+      {prs.length > 0 ? (
+        <section className="mt-8">
+          <h2 className="mb-3 font-display text-sm font-medium text-ink">
+            Personal records
+          </h2>
+          <ul className="divide-y divide-orange-dim/25 rounded border border-orange-dim/40 bg-surface">
+            {prs.slice(0, 12).map((pr) => (
+              <li
+                key={pr.exerciseId}
+                className="flex items-baseline justify-between gap-3 px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-ink">
+                    {pr.name}
+                  </div>
+                  <div className="font-mono text-xs text-muted">
+                    {formatPrDate(pr.date)}
+                    {pr.showE1rm ? ` · est. 1RM ${pr.e1rm} ${unit}` : ''}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-display text-lg font-semibold tabular-nums">
+                    {pr.weight} × {pr.reps}
+                  </div>
+                  <div className="text-xs text-muted">
+                    {pr.perDumbbell ? `${unit} each` : unit} · best set
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   )
 }

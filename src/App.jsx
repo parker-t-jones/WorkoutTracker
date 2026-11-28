@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Calendar, Clock, TrendingUp, Trophy, User, Users } from 'lucide-react'
 import CalendarView from './components/CalendarView'
-import HistoryView from './components/HistoryView'
 import WorkoutDetail from './components/WorkoutDetail'
+import HistoryView from './components/HistoryView'
 import LogSet from './components/LogSet'
 import LogCardio from './components/LogCardio'
 import OnboardingForm from './components/OnboardingForm'
@@ -11,10 +11,12 @@ import LeaderboardView from './components/LeaderboardView'
 import TabBar from './components/TabBar'
 import AuthScreen from './components/AuthScreen'
 import AccountView from './components/AccountView'
-import AthletesView from './components/AthletesView'
-import ModeSwitcher from './components/ModeSwitcher'
 import WeekAdaptationSummary from './components/WeekAdaptationSummary'
 import ProposedSubstitutionsView from './components/ProposedSubstitutionsView'
+import AthletesView from './components/AthletesView'
+import ModeSwitcher from './components/ModeSwitcher'
+import { DemoChip, HowToDoIt } from './components/ExerciseDemo'
+import { useExerciseMedia } from './lib/useExerciseMedia'
 import { supabase } from './lib/supabase'
 import {
   loadProgramData,
@@ -27,15 +29,21 @@ import {
 import {
   saveSetLog,
   updateSetLog,
+  deleteSetLog,
+  finishScheduledWorkout,
   saveCardioLog,
   saveIntervalSplit,
   updateExerciseRpe,
   updateExercisePain,
   isCardioExercise,
 } from './lib/logging'
+import {
+  saveExerciseNote,
+  deleteExerciseNote,
+  isMissingNotesTable,
+} from './lib/notes'
 import { onAuthStateChange, signOut, ensureProfile } from './lib/auth'
 import {
-  loadRoleContext,
   getIntendedRole,
   setIntendedRole,
   clearIntendedRole,
@@ -43,6 +51,22 @@ import {
   setStoredAppMode,
   clearStoredAppMode,
 } from './lib/roles'
+import { signOutDeletedAccount } from './lib/account'
+import { workoutExerciseIndex } from './lib/progress'
+import { buildScheduledProgress } from './lib/schedule'
+import { listMyCoachLinks, todayIso } from './lib/coach'
+import { equipmentAllowedForAccess } from './lib/adapt'
+import {
+  hasActiveCoach,
+  isWorkoutWeekLocked,
+  sortWorkoutExercises,
+} from './lib/workoutEditing'
+import {
+  deleteWorkoutExercise,
+  fetchExerciseLibrary,
+  insertWorkoutExercise,
+  updateWorkoutExercise,
+} from './lib/workoutEditApi'
 
 const TRAINING_TABS = [
   { id: 'calendar', label: 'Calendar', Icon: Calendar },
@@ -52,6 +76,8 @@ const TRAINING_TABS = [
   { id: 'account', label: 'Account', Icon: User },
 ]
 
+// Coaching mode (users.is_coach only): the coach's athletes — invites, their
+// calendars, the workout builder, logs/notes and demo media — plus Account.
 const COACHING_TABS = [
   { id: 'athletes', label: 'Athletes', Icon: Users },
   { id: 'account', label: 'Account', Icon: User },
@@ -62,6 +88,8 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [authScreenMode, setAuthScreenMode] = useState('login')
   const [passwordRecovery, setPasswordRecovery] = useState(false)
+  // Shown on the auth screen after the user deletes their account.
+  const [authNotice, setAuthNotice] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [onboardingError, setOnboardingError] = useState(null)
@@ -76,28 +104,61 @@ export default function App() {
   const [workoutsById, setWorkoutsById] = useState({})
   const [workoutDetails, setWorkoutDetails] = useState({})
   const [userId, setUserId] = useState(null)
+  // users.is_coach from ensureProfile — gates Coaching mode (RLS/RPCs enforce
+  // the real permission server-side; the app can't grant it).
+  const [isCoach, setIsCoach] = useState(false)
   const [logs, setLogs] = useState([])
   const [logSplits, setLogSplits] = useState([])
+  // exercise_notes rows; notesAvailable = false until
+  // 2026-11-notes-and-editing.sql is run (then notes fall back to logs.pain_*).
+  const [exerciseNotes, setExerciseNotes] = useState([])
+  const [notesAvailable, setNotesAvailable] = useState(true)
+  // Athlete-side coach status, from list_my_coach_links: 'self' (AI trainer,
+  // may edit own workouts), 'coached' (active coach — no edit controls) or
+  // 'unknown' (still loading / failed to load — no edit controls either).
+  const [coachStatus, setCoachStatus] = useState('unknown')
+  const [equipmentAccess, setEquipmentAccess] = useState(null)
+  // Exercise library for the workout editor (loaded on first use).
+  const [exerciseLibrary, setExerciseLibrary] = useState(null)
+  const [libraryError, setLibraryError] = useState(null)
+  // Edits to workout_exercises run one at a time (optimistic UI first).
+  const editQueueRef = useRef(Promise.resolve())
 
   const [view, setView] = useState('calendar') // calendar | history | progress | leaderboard | account | athletes | workout | log | week-summary | proposals
-  const [workoutSource, setWorkoutSource] = useState('calendar') // calendar | history
+  // Sign-in split: the role picked on the auth landing ('athlete' | 'coach'),
+  // and which side of the app a coach is using ('training' | 'coaching').
   const [intendedRole, setIntendedRoleState] = useState(() => getIntendedRole())
-  const [isCoach, setIsCoach] = useState(false)
-  const [hasActiveCoach, setHasActiveCoach] = useState(false)
-  const [appMode, setAppMode] = useState('training') // training | coaching
+  const [appMode, setAppMode] = useState('training')
+  // Picked "Sign in as a Coach" but users.is_coach is false.
   const [coachDenied, setCoachDenied] = useState(false)
   const roleRoutedRef = useRef(false)
+  // Bumped when the Athletes tab is tapped so AthletesView returns to the roster.
   const [rosterNonce, setRosterNonce] = useState(0)
+  // Where "back" from a workout goes (it can be opened from the history list).
+  const [workoutReturnView, setWorkoutReturnView] = useState('calendar')
+  // Month shown in the calendar grid — kept here so it survives opening a workout.
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
   const [scheduledId, setScheduledId] = useState(null)
   const [workoutExerciseId, setWorkoutExerciseId] = useState(null)
   const [editLogId, setEditLogId] = useState(null)
   const [logShowRpe, setLogShowRpe] = useState(false)
   const [savingLog, setSavingLog] = useState(false)
   const [savingRpe, setSavingRpe] = useState(false)
-  const [savingPainId, setSavingPainId] = useState(null)
+  const [savingNoteId, setSavingNoteId] = useState(null)
   const [logError, setLogError] = useState(null)
   const [justCompleted, setJustCompleted] = useState(false)
+  const [finishingWorkout, setFinishingWorkout] = useState(false)
+  const [signOutError, setSignOutError] = useState(null)
+  // User id whose data is loaded/loading. Auth events for the same user
+  // (SIGNED_IN re-emitted on tab refocus, USER_UPDATED) must not remount the
+  // app — that would unmount LogSet mid-entry.
+  const loadedUserIdRef = useRef(null)
 
+  // coached: athletes with an active coach get their workouts from the coach,
+  // so an empty schedule doesn't send them through AI onboarding.
   const applyProgramData = useCallback((data, coached = false) => {
     setUserId(data.userId)
     setScheduledWorkouts(data.scheduledWorkouts)
@@ -107,8 +168,35 @@ export default function App() {
     setWorkoutDetails(data.workoutDetails)
     setLogs(data.logs ?? [])
     setLogSplits(data.logSplits ?? [])
+    setExerciseNotes(data.exerciseNotes ?? [])
+    setNotesAvailable(data.notesAvailable !== false)
     setNeedsOnboarding(data.scheduledWorkouts.length === 0 && !coached)
   }, [])
+
+  /** Resolves to the new status; never throws. */
+  const loadCoachStatus = useCallback(async () => {
+    let status
+    try {
+      const links = await listMyCoachLinks()
+      status = hasActiveCoach(links) ? 'coached' : 'self'
+    } catch (err) {
+      // Coach RPCs not migrated → nobody can have a coach yet.
+      if (/aren.t set up yet/i.test(err?.message || '')) {
+        status = 'self'
+      } else {
+        console.warn('[coach] could not load coach status', err)
+        status = 'unknown'
+      }
+    }
+    setCoachStatus(status)
+    return status
+  }, [])
+
+  /** Athlete accepted / declined / ended a coach link (Account → Coach). */
+  const handleCoachLinksChange = useCallback(async () => {
+    const status = await loadCoachStatus()
+    if (status === 'coached') setNeedsOnboarding(false)
+  }, [loadCoachStatus])
 
   const refresh = useCallback(
     async (authUser) => {
@@ -128,15 +216,18 @@ export default function App() {
 
       try {
         setLoadError(null)
-        await ensureProfile(user)
-        const roleCtx = await loadRoleContext(user.id)
-        setIsCoach(roleCtx.isCoach)
-        setHasActiveCoach(roleCtx.hasActiveCoach)
+        const profile = await ensureProfile(user)
+        const coach = Boolean(profile?.is_coach)
+        setIsCoach(coach)
+        setEquipmentAccess(profile?.equipment_access ?? null)
 
+        // Route once per sign-in: the role picked on the landing screen wins;
+        // otherwise a coach resumes their last mode (default Coaching), so a
+        // coach who doesn't train with the app never sees onboarding.
         if (!roleRoutedRef.current) {
           roleRoutedRef.current = true
           const intended = getIntendedRole()
-          if (intended === 'coach' && !roleCtx.isCoach) {
+          if (intended === 'coach' && !coach) {
             setCoachDenied(true)
             setIntendedRoleState('coach')
             return null
@@ -145,15 +236,21 @@ export default function App() {
           let mode = 'training'
           if (intended === 'coach') mode = 'coaching'
           else if (intended === 'athlete') mode = 'training'
-          else if (roleCtx.isCoach) mode = getStoredAppMode() ?? 'coaching'
+          else if (coach) mode = getStoredAppMode() ?? 'coaching'
+          if (!coach) mode = 'training'
           setAppMode(mode)
           setStoredAppMode(mode)
-          if (mode === 'coaching') setView('athletes')
+          setView(mode === 'coaching' ? 'athletes' : 'calendar')
           clearIntendedRole()
         }
 
-        const data = await loadProgramData(user.id)
-        applyProgramData(data, roleCtx.hasActiveCoach)
+        // Coach status decides onboarding (coached athletes skip it); it
+        // never throws ('unknown' on failure → edit controls stay hidden).
+        const [status, data] = await Promise.all([
+          loadCoachStatus(),
+          loadProgramData(user.id),
+        ])
+        applyProgramData(data, status === 'coached')
         return data
       } catch (err) {
         console.error(err)
@@ -163,7 +260,7 @@ export default function App() {
         setBootstrapping(false)
       }
     },
-    [applyProgramData],
+    [applyProgramData, loadCoachStatus],
   )
 
   const refreshRef = useRef(refresh)
@@ -187,6 +284,15 @@ export default function App() {
         setPasswordRecovery(true)
         setAuthScreenMode('recovery')
         setBootstrapping(false)
+        // Load data in the background so "Continue" after the new password
+        // lands on a ready app (and USER_UPDATED is then a same-user no-op).
+        const user = nextSession?.user
+        if (user?.id && loadedUserIdRef.current !== user.id) {
+          loadedUserIdRef.current = user.id
+          setTimeout(() => {
+            refreshRef.current(user)
+          }, 0)
+        }
         return
       }
 
@@ -195,26 +301,39 @@ export default function App() {
       if (event === 'TOKEN_REFRESHED') return
 
       if (nextSession?.user) {
+        setAuthNotice(null)
+        // Same user (SIGNED_IN on refocus, USER_UPDATED, …): nothing to reload.
+        if (loadedUserIdRef.current === nextSession.user.id) return
+        loadedUserIdRef.current = nextSession.user.id
         if (!submittingRef.current) setBootstrapping(true)
         // Defer DB calls — awaiting inside onAuthStateChange can deadlock the auth lock.
         setTimeout(() => {
           refreshRef.current(nextSession.user)
         }, 0)
       } else {
+        loadedUserIdRef.current = null
         setUserId(null)
+        setIsCoach(false)
+        setCoachStatus('unknown')
+        setEquipmentAccess(null)
+        setExerciseLibrary(null)
+        setLibraryError(null)
+        setLoadError(null)
+        setAdaptationSummary(null)
+        setSignOutError(null)
         setScheduledWorkouts([])
         setWorkoutsById({})
         setWorkoutDetails({})
         setLogs([])
         setLogSplits([])
+        setExerciseNotes([])
+        setNotesAvailable(true)
         setNeedsOnboarding(false)
         setView('calendar')
-        setWorkoutSource('calendar')
+        setWorkoutReturnView('calendar')
         setAuthScreenMode('login')
         setPasswordRecovery(false)
         setIntendedRoleState(null)
-        setIsCoach(false)
-        setHasActiveCoach(false)
         setAppMode('training')
         setCoachDenied(false)
         roleRoutedRef.current = false
@@ -254,10 +373,9 @@ export default function App() {
 
   async function handleGenerateNextWeek() {
     if (generatingNextWeekRef.current || !userId) return
-    if (hasActiveCoach) {
-      console.info('skipped: athlete has active coach')
-      return
-    }
+    // Coach-managed athletes get their weeks from the coach, not the AI
+    // (generateAndSaveNextWeek re-checks against the database).
+    if (coachStatus === 'coached') return
     generatingNextWeekRef.current = true
     setGeneratingNextWeek(true)
     setNextWeekError(null)
@@ -269,15 +387,19 @@ export default function App() {
         workouts: Object.values(workoutsById),
         workoutDetails,
         logs,
+        logSplits,
+        exerciseNotes,
       })
 
       if (result?.skipped) {
+        // A coach link became active since the app loaded.
+        await loadCoachStatus()
         return
       }
 
       // Always reload calendar data after insert — don't rely on pre-generate state.
       const data = await loadProgramData(userId)
-      applyProgramData(data, hasActiveCoach)
+      applyProgramData(data, false)
 
       setAdaptationSummary({
         weekNumber: result.weekNumber,
@@ -294,12 +416,28 @@ export default function App() {
   }
 
   async function handleSignOut() {
-    await signOut()
+    setSignOutError(null)
+    try {
+      await signOut()
+    } catch (err) {
+      console.error(err)
+      // Server sign-out failed (e.g. offline) — still clear this device.
+      try {
+        await supabase?.auth.signOut({ scope: 'local' })
+      } catch (localErr) {
+        console.error(localErr)
+        setSignOutError(err?.message || 'Could not sign out — try again')
+        return
+      }
+    }
+    setLoadError(null)
+    setAdaptationSummary(null)
   }
 
   function handleSelectRole(role) {
     setIntendedRoleState(role)
     setIntendedRole(role)
+    // Denied as coach → continue as an athlete with the same session.
     if (coachDenied && role === 'athlete') {
       setCoachDenied(false)
       setAppMode('training')
@@ -308,6 +446,7 @@ export default function App() {
       clearIntendedRole()
       const user = session?.user
       if (user) {
+        loadedUserIdRef.current = user.id
         setBootstrapping(true)
         refreshRef.current(user)
       }
@@ -321,6 +460,7 @@ export default function App() {
   }
 
   function handleModeChange(next) {
+    if (next === appMode) return
     setAppMode(next)
     setStoredAppMode(next)
     setScheduledId(null)
@@ -328,7 +468,7 @@ export default function App() {
     setEditLogId(null)
     setLogShowRpe(false)
     setJustCompleted(false)
-    setWorkoutSource('calendar')
+    setWorkoutReturnView('calendar')
     if (next === 'coaching') {
       setView((v) => (v === 'account' ? 'account' : 'athletes'))
     } else {
@@ -336,9 +476,26 @@ export default function App() {
     }
   }
 
-  function getWorkout(workoutId) {
-    return workoutsById[workoutId]
+  async function handleAccountDeleted() {
+    setAuthNotice('Your account has been deleted.')
+    await signOutDeletedAccount()
   }
+
+  function handleRetryLoad() {
+    const user = session?.user
+    if (!user?.id) {
+      setLoadError(null)
+      return
+    }
+    loadedUserIdRef.current = user.id
+    setBootstrapping(true)
+    refreshRef.current(user)
+  }
+
+  const getWorkout = useCallback(
+    (workoutId) => workoutsById[workoutId],
+    [workoutsById],
+  )
 
   function getScheduledBundle(id) {
     const sw = scheduledWorkouts.find((s) => s.id === id)
@@ -352,14 +509,14 @@ export default function App() {
     }
   }
 
-  function openWorkout(id, source = 'calendar') {
+  function openWorkout(id) {
+    setWorkoutReturnView(view === 'history' ? 'history' : 'calendar')
     setScheduledId(id)
     setWorkoutExerciseId(null)
     setEditLogId(null)
     setLogShowRpe(false)
     setJustCompleted(false)
     setLogError(null)
-    setWorkoutSource(source === 'history' ? 'history' : 'calendar')
     setView('workout')
   }
 
@@ -372,7 +529,7 @@ export default function App() {
   }
 
   function backToCalendar() {
-    setView(workoutSource === 'history' ? 'history' : 'calendar')
+    setView(workoutReturnView === 'history' ? 'history' : 'calendar')
     setScheduledId(null)
     setWorkoutExerciseId(null)
     setEditLogId(null)
@@ -395,7 +552,13 @@ export default function App() {
     setLogs((prev) => prev.map((row) => byId[row.id] ?? row))
   }
 
-  async function handleSaveLog({ set_number, actual_reps, actual_weight }) {
+  async function handleSaveLog({
+    set_number,
+    actual_reps,
+    actual_weight,
+    weight_unit,
+    load_basis,
+  }) {
     const scheduled = getScheduledBundle(scheduledId)
     if (!scheduled || !workoutExerciseId) return
     if (!session?.user?.id) {
@@ -406,18 +569,21 @@ export default function App() {
     setSavingLog(true)
     setLogError(null)
     try {
-      const { log, completed } = await saveSetLog({
+      const { log, completed, warning } = await saveSetLog({
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         setNumber: set_number,
         actualReps: actual_reps,
         actualWeight: actual_weight,
+        weightUnit: weight_unit,
+        loadBasis: load_basis,
         exercises: scheduled.exercises,
         existingLogs: logs,
         logSplits,
       })
 
-      setLogs((prev) => [...prev, log])
+      setLogs((prev) => [...prev.filter((l) => l.id !== log.id), log])
+      if (warning) setLogError(warning)
 
       // Stay on the log screen so the optional post-exercise RPE prompt can show.
       if (completed) {
@@ -453,7 +619,7 @@ export default function App() {
       const existing = logs.find(
         (l) => l.workout_exercise_id === workoutExerciseId,
       )
-      const { log, completed } = await saveCardioLog({
+      const { log, completed, warning } = await saveCardioLog({
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         actualDurationSeconds,
@@ -464,10 +630,8 @@ export default function App() {
         logSplits,
         existingLogId: existing?.id ?? null,
       })
-      setLogs((prev) => {
-        if (existing) return prev.map((l) => (l.id === log.id ? log : l))
-        return [...prev, log]
-      })
+      setLogs((prev) => [...prev.filter((l) => l.id !== log.id), log])
+      if (warning) setLogError(warning)
       if (completed) {
         setScheduledWorkouts((prev) =>
           prev.map((sw) =>
@@ -502,7 +666,12 @@ export default function App() {
       const existing = logs.find(
         (l) => l.workout_exercise_id === workoutExerciseId,
       )
-      const { log, completed, logSplits: nextSplits } = await saveIntervalSplit({
+      const {
+        log,
+        completed,
+        warning,
+        logSplits: nextSplits,
+      } = await saveIntervalSplit({
         scheduledWorkoutId: scheduled.id,
         workoutExerciseId,
         splitNumber,
@@ -518,6 +687,7 @@ export default function App() {
         prev.some((l) => l.id === log.id) ? prev : [...prev, log],
       )
       setLogSplits(nextSplits)
+      if (warning) setLogError(warning)
       if (completed) {
         setScheduledWorkouts((prev) =>
           prev.map((sw) =>
@@ -534,7 +704,13 @@ export default function App() {
     }
   }
 
-  async function handleUpdateLog({ log_id, actual_reps, actual_weight }) {
+  async function handleUpdateLog({
+    log_id,
+    actual_reps,
+    actual_weight,
+    weight_unit,
+    load_basis,
+  }) {
     if (!log_id) return
     if (!session?.user?.id) {
       setLogError('Not signed in')
@@ -548,6 +724,8 @@ export default function App() {
         logId: log_id,
         actualReps: actual_reps,
         actualWeight: actual_weight,
+        weightUnit: weight_unit,
+        loadBasis: load_basis,
       })
       mergeUpdatedLogs([log])
     } catch (err) {
@@ -556,6 +734,54 @@ export default function App() {
       throw err
     } finally {
       setSavingLog(false)
+    }
+  }
+
+  async function handleDeleteLog(logId) {
+    const target = logs.find((l) => l.id === logId)
+    if (!target) return
+    if (!session?.user?.id) {
+      setLogError('Not signed in')
+      return
+    }
+    setSavingLog(true)
+    setLogError(null)
+    try {
+      const { updated } = await deleteSetLog({
+        logId,
+        workoutExerciseId: target.workout_exercise_id,
+      })
+      const byId = Object.fromEntries(updated.map((row) => [row.id, row]))
+      setLogs((prev) =>
+        prev.filter((l) => l.id !== logId).map((l) => byId[l.id] ?? l),
+      )
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not delete set — try again')
+      throw err
+    } finally {
+      setSavingLog(false)
+    }
+  }
+
+  async function handleFinishWorkout() {
+    const scheduled = getScheduledBundle(scheduledId)
+    if (!scheduled || finishingWorkout) return
+    setFinishingWorkout(true)
+    setLogError(null)
+    try {
+      await finishScheduledWorkout(scheduled.id)
+      setScheduledWorkouts((prev) =>
+        prev.map((sw) =>
+          sw.id === scheduled.id ? { ...sw, status: 'completed' } : sw,
+        ),
+      )
+      setJustCompleted(true)
+    } catch (err) {
+      console.error(err)
+      setLogError(err.message || 'Could not finish workout — try again')
+    } finally {
+      setFinishingWorkout(false)
     }
   }
 
@@ -582,27 +808,313 @@ export default function App() {
     }
   }
 
-  async function handleSavePain({ workoutExerciseId: weId, painFlag, painNote }) {
+  /**
+   * Save (or clear, with an empty note and no pain) the athlete's note on one
+   * exercise. The pain checkbox is also mirrored onto logs.pain_flag /
+   * pain_note when sets exist, so older readers and adaptation keep working.
+   * Without the exercise_notes table this falls back to the old behaviour:
+   * pain notes on logs only, which needs at least one logged set.
+   * Throws (with a user-facing message) so the note sheet can stay open.
+   */
+  async function handleSaveNote({ workoutExerciseId: weId, note, isPain }) {
     if (!weId) return
-    if (!session?.user?.id) {
-      setLogError('Not signed in')
-      return
-    }
-    setSavingPainId(weId)
+    if (!session?.user?.id) throw new Error('Not signed in')
+    const text = String(note ?? '').trim()
+    const pain = Boolean(isPain)
+    const hasLogs = logs.some((l) => l.workout_exercise_id === weId)
+    const existing = exerciseNotes.find((n) => n.workout_exercise_id === weId)
+
+    setSavingNoteId(weId)
     setLogError(null)
     try {
-      const updated = await updateExercisePain({
-        workoutExerciseId: weId,
-        painFlag,
-        painNote,
-      })
-      mergeUpdatedLogs(updated)
+      let useNotesTable = notesAvailable
+      if (useNotesTable) {
+        try {
+          if (text) {
+            const row = await saveExerciseNote({
+              workoutExerciseId: weId,
+              note: text,
+              isPain: pain,
+            })
+            setExerciseNotes((prev) => [
+              ...prev.filter((n) => n.workout_exercise_id !== weId),
+              row,
+            ])
+          } else {
+            if (pain && !hasLogs) {
+              throw new Error('Add a few words about the pain so it can be saved.')
+            }
+            if (existing) {
+              await deleteExerciseNote({ workoutExerciseId: weId })
+              setExerciseNotes((prev) =>
+                prev.filter((n) => n.workout_exercise_id !== weId),
+              )
+            }
+          }
+        } catch (err) {
+          if (!isMissingNotesTable(err)) throw err
+          setNotesAvailable(false)
+          useNotesTable = false
+        }
+      }
+
+      if (!useNotesTable) {
+        if (!hasLogs) {
+          throw new Error('Log a set first — notes before the first set need a database update.')
+        }
+        if (text && !pain) {
+          throw new Error(
+            'Only pain / discomfort notes can be saved until the database is updated — tick the box or clear the note.',
+          )
+        }
+      }
+
+      if (hasLogs) {
+        const loggedPain = logs.some(
+          (l) => l.workout_exercise_id === weId && l.pain_flag,
+        )
+        if (pain || loggedPain) {
+          try {
+            const updated = await updateExercisePain({
+              workoutExerciseId: weId,
+              painFlag: pain,
+              painNote: pain ? text : null,
+            })
+            mergeUpdatedLogs(updated)
+          } catch (err) {
+            if (!useNotesTable) throw err
+            console.error(err)
+            throw new Error(
+              'Note saved, but the pain flag on your logged sets could not be updated — try again.',
+            )
+          }
+        }
+      }
     } catch (err) {
       console.error(err)
-      setLogError(err.message || 'Could not save note — try again')
+      throw new Error(err?.message || 'Could not save note — try again')
     } finally {
-      setSavingPainId(null)
+      setSavingNoteId(null)
     }
+  }
+
+  async function handleDeleteNote(weId) {
+    return handleSaveNote({ workoutExerciseId: weId, note: '', isPain: false })
+  }
+
+  async function handleLoadLibrary() {
+    setLibraryError(null)
+    try {
+      setExerciseLibrary(await fetchExerciseLibrary())
+    } catch (err) {
+      console.error(err)
+      setLibraryError(err?.message || 'Could not load the exercise library')
+    }
+  }
+
+  /** Replace one workout's exercise list (kept in display order). */
+  function setWorkoutExercises(workoutId, fn) {
+    setWorkoutDetails((prev) => {
+      const detail = prev[workoutId]
+      if (!detail) return prev
+      return {
+        ...prev,
+        [workoutId]: {
+          ...detail,
+          exercises: sortWorkoutExercises(fn(detail.exercises)),
+        },
+      }
+    })
+  }
+
+  function enqueueEdit(task) {
+    const run = editQueueRef.current.then(task)
+    editQueueRef.current = run.catch(() => {})
+    return run
+  }
+
+  /**
+   * Athlete edits to their own workout, persisted immediately. Each op is
+   * applied to workoutDetails at once (so LogSet / progress see it) and
+   * rolled back if the write fails; writes are serialised so rapid taps
+   * land in order. Rejects with a user-facing message.
+   *   { type: 'update', workoutId, weId, patch, exercise? }
+   *   { type: 'add', workoutId, row, exercise }
+   *   { type: 'remove', workoutId, weId }
+   *   { type: 'reorder', workoutId, patches: [{ id, sort_order }] }
+   */
+  function handleEditWorkout(op) {
+    const detail = workoutDetails[op.workoutId]
+    if (!detail) return Promise.reject(new Error('Workout not found'))
+    const { workoutId } = op
+
+    if (op.type === 'update') {
+      const before = detail.exercises.find((we) => we.id === op.weId)
+      if (!before) return Promise.reject(new Error('Exercise not found'))
+      const optimistic = {
+        ...op.patch,
+        ...(op.exercise ? { exercise: op.exercise } : {}),
+      }
+      setWorkoutExercises(workoutId, (list) =>
+        list.map((we) => (we.id === op.weId ? { ...we, ...optimistic } : we)),
+      )
+      return enqueueEdit(() => updateWorkoutExercise(op.weId, op.patch)).then(
+        (row) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.map((we) => (we.id === row.id ? { ...we, ...row } : we)),
+          )
+        },
+        (err) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.map((we) => (we.id === op.weId ? before : we)),
+          )
+          throw err
+        },
+      )
+    }
+
+    if (op.type === 'add') {
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const hasSortOrder = detail.exercises.every((we) => we.sort_order != null)
+      const maxOrder = Math.max(0, ...detail.exercises.map((we) => we.sort_order ?? 0))
+      setWorkoutExercises(workoutId, (list) => [
+        ...list,
+        {
+          ...op.row,
+          id: tempId,
+          exercise: op.exercise,
+          ...(hasSortOrder ? { sort_order: maxOrder + 1 } : {}),
+        },
+      ])
+      return enqueueEdit(() => insertWorkoutExercise(op.row)).then(
+        (row) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.map((we) => (we.id === tempId ? row : we)),
+          )
+        },
+        (err) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.filter((we) => we.id !== tempId),
+          )
+          throw err
+        },
+      )
+    }
+
+    if (op.type === 'remove') {
+      const before = detail.exercises.find((we) => we.id === op.weId)
+      if (!before) return Promise.reject(new Error('Exercise not found'))
+      if (logs.some((l) => l.workout_exercise_id === op.weId)) {
+        return Promise.reject(
+          new Error('This exercise has logged sets — delete them before removing it.'),
+        )
+      }
+      setWorkoutExercises(workoutId, (list) => list.filter((we) => we.id !== op.weId))
+      return enqueueEdit(() => deleteWorkoutExercise(op.weId)).then(
+        () => {
+          // ON DELETE CASCADE removed the note too.
+          setExerciseNotes((prev) =>
+            prev.filter((n) => n.workout_exercise_id !== op.weId),
+          )
+        },
+        (err) => {
+          setWorkoutExercises(workoutId, (list) =>
+            list.some((we) => we.id === before.id) ? list : [...list, before],
+          )
+          throw err
+        },
+      )
+    }
+
+    if (op.type === 'reorder') {
+      const previous = new Map(detail.exercises.map((we) => [we.id, we.sort_order]))
+      const byId = new Map(op.patches.map((p) => [p.id, p.sort_order]))
+      setWorkoutExercises(workoutId, (list) =>
+        list.map((we) => (byId.has(we.id) ? { ...we, sort_order: byId.get(we.id) } : we)),
+      )
+      return enqueueEdit(async () => {
+        const done = []
+        try {
+          for (const p of op.patches) {
+            await updateWorkoutExercise(p.id, { sort_order: p.sort_order })
+            done.push(p.id)
+          }
+        } catch (err) {
+          // Best effort: put back the rows that already moved.
+          for (const id of done) {
+            try {
+              await updateWorkoutExercise(id, { sort_order: previous.get(id) })
+            } catch (revertErr) {
+              console.error('Could not revert reorder:', revertErr)
+            }
+          }
+          throw err
+        }
+      }).catch((err) => {
+        setWorkoutExercises(workoutId, (list) =>
+          list.map((we) =>
+            previous.has(we.id) ? { ...we, sort_order: previous.get(we.id) } : we,
+          ),
+        )
+        throw err
+      })
+    }
+
+    return Promise.reject(new Error('Unknown edit'))
+  }
+
+  // workout_exercise id → { exerciseId, date, … } for "last time" / PRs.
+  const weIndex = useMemo(
+    () => workoutExerciseIndex(scheduledWorkouts, workoutDetails),
+    [scheduledWorkouts, workoutDetails],
+  )
+
+  // scheduled id → { done, total, exerciseCount } for calendar/history status.
+  const progressById = useMemo(
+    () =>
+      buildScheduledProgress(scheduledWorkouts, workoutDetails, logs, logSplits),
+    [scheduledWorkouts, workoutDetails, logs, logSplits],
+  )
+
+  // Coach demo media for the open workout — fetched lazily (one query per
+  // workout), never in the global loader. Errors / missing table → no media.
+  const mediaBundle =
+    (view === 'workout' || view === 'log') && scheduledId != null
+      ? getScheduledBundle(scheduledId)
+      : null
+  const { media: exerciseMedia } = useExerciseMedia(mediaBundle?.exercises, {
+    enabled: Boolean(mediaBundle),
+  })
+
+  function changeTab(tab) {
+    setView(tab)
+    if (tab === 'athletes') setRosterNonce((n) => n + 1)
+    setWorkoutReturnView('calendar')
+    setScheduledId(null)
+    setWorkoutExerciseId(null)
+    setEditLogId(null)
+    setLogShowRpe(false)
+    setJustCompleted(false)
+  }
+
+  // Before the loading screen: a background reload must not unmount the
+  // recovery form (or its "Password updated" confirmation).
+  if (passwordRecovery) {
+    return (
+      <AuthScreen
+        key="recovery"
+        mode="recovery"
+        onAuthed={() => {
+          setPasswordRecovery(false)
+          setAuthScreenMode('login')
+        }}
+        onCancel={async () => {
+          await handleSignOut()
+          setPasswordRecovery(false)
+          setAuthScreenMode('login')
+        }}
+      />
+    )
   }
 
   if (bootstrapping && !submitting) {
@@ -615,22 +1127,36 @@ export default function App() {
 
   if (loadError) {
     return (
-      <div className="mx-auto max-w-lg px-4 py-16 text-center text-danger">
-        {loadError}
+      <div className="mx-auto max-w-lg px-4 py-16 text-center">
+        <p role="alert" className="text-danger">
+          {loadError}
+        </p>
+        {supabase ? (
+          <div className="mt-6 space-y-3">
+            {session?.user ? (
+              <button
+                type="button"
+                onClick={handleRetryLoad}
+                className="w-full rounded bg-orange py-3 text-sm font-medium text-on-orange hover:bg-orange-dim"
+              >
+                Retry
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="w-full rounded border border-orange-dim/50 bg-surface py-3 text-sm font-medium text-ink hover:bg-surface-alt"
+            >
+              Sign out
+            </button>
+            {signOutError ? (
+              <p role="alert" className="text-sm text-danger">
+                {signOutError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-    )
-  }
-
-  if (passwordRecovery) {
-    return (
-      <AuthScreen
-        key="recovery"
-        mode="recovery"
-        onAuthed={() => {
-          setPasswordRecovery(false)
-          setAuthScreenMode('login')
-        }}
-      />
     )
   }
 
@@ -639,6 +1165,7 @@ export default function App() {
       <AuthScreen
         key={authScreenMode}
         mode={authScreenMode}
+        notice={authNotice}
         selectedRole={intendedRole}
         onSelectRole={handleSelectRole}
         onBackToRoles={handleBackToRoles}
@@ -651,18 +1178,28 @@ export default function App() {
     )
   }
 
-  if (needsOnboarding && appMode === 'training') {
+  const coaching = isCoach && appMode === 'coaching'
+  const modeSwitcher = isCoach ? (
+    <ModeSwitcher mode={coaching ? 'coaching' : 'training'} onChange={handleModeChange} />
+  ) : null
+
+  // A coach's own training side still needs onboarding; Coaching mode doesn't.
+  if (needsOnboarding && !coaching && view !== 'account' && view !== 'proposals') {
+    const form = (
+      <OnboardingForm
+        onSubmit={handleOnboardingSubmit}
+        error={onboardingError}
+        submitting={submitting}
+        onSignOut={handleSignOut}
+        signOutError={signOutError}
+        onAccountDeleted={handleAccountDeleted}
+      />
+    )
+    if (!isCoach) return form
     return (
       <>
-        {isCoach ? (
-          <ModeSwitcher mode={appMode} onChange={handleModeChange} />
-        ) : null}
-        <OnboardingForm
-          onSubmit={handleOnboardingSubmit}
-          error={onboardingError}
-          submitting={submitting}
-          onSignOut={handleSignOut}
-        />
+        {modeSwitcher}
+        {form}
       </>
     )
   }
@@ -720,46 +1257,83 @@ export default function App() {
           />
         )
       }
+      const exerciseHistory = we.exercise_id
+        ? logs.filter(
+            (l) =>
+              weIndex.get(l.workout_exercise_id)?.exerciseId === we.exercise_id,
+          )
+        : existingLogs
       return (
         <LogSet
           key={we.id}
           workoutExercise={we}
           existingLogs={existingLogs}
+          exerciseHistory={exerciseHistory}
+          weIndex={weIndex}
+          scheduledDate={scheduled.date}
           onBack={backToWorkout}
           onSave={handleSaveLog}
           onUpdate={handleUpdateLog}
+          onDelete={handleDeleteLog}
           onSaveRpe={handleSaveRpe}
           saving={savingLog}
           savingRpe={savingRpe}
           error={logError}
           initialEditLogId={editLogId}
           initialShowRpe={logShowRpe}
+          headerExtras={<HowToDoIt items={exerciseMedia[we.id]} />}
         />
       )
     }
   }
 
   if (view === 'workout' && scheduled) {
+    // Editing: only athletes WITHOUT an active coach ("AI trainer"), only
+    // workouts they built themselves (created_by; absent before the
+    // migration), and not once the week is done with (see
+    // isWorkoutWeekLocked). The server enforces the coach rule as well.
+    const w = scheduled.workout
+    const weekScheduled = scheduledWorkouts.filter(
+      (sw) => workoutsById[sw.workout_id]?.week_number === w.week_number,
+    )
+    const canEditWorkout =
+      coachStatus === 'self' &&
+      (w.created_by == null || w.created_by === userId) &&
+      !isWorkoutWeekLocked({
+        weekNumber: w.week_number,
+        maxWeekNumber: nextWeekEligibility.maxWeek,
+        weekScheduled,
+        todayKey: todayIso(),
+      })
     return (
       <WorkoutDetail
         scheduled={scheduled}
         logs={logs}
         logSplits={logSplits}
         onBack={backToCalendar}
-        backLabel={workoutSource === 'history' ? '← History' : '← Calendar'}
+        backLabel={workoutReturnView === 'history' ? 'History' : 'Calendar'}
         onLogExercise={openLog}
-        onSavePain={handleSavePain}
-        savingPainId={savingPainId}
+        exerciseNotes={exerciseNotes}
+        onSaveNote={handleSaveNote}
+        onDeleteNote={handleDeleteNote}
+        savingNoteId={savingNoteId}
+        onFinishWorkout={handleFinishWorkout}
+        finishingWorkout={finishingWorkout}
         justCompleted={justCompleted}
         error={logError}
+        renderExerciseExtras={(we) => <DemoChip items={exerciseMedia[we.id]} />}
+        canEdit={canEditWorkout}
+        onEditWorkout={handleEditWorkout}
+        exerciseLibrary={exerciseLibrary}
+        libraryError={libraryError}
+        onLoadLibrary={handleLoadLibrary}
+        equipmentAllowed={
+          equipmentAccess ? equipmentAllowedForAccess(equipmentAccess) : null
+        }
       />
     )
   }
 
-  const coaching = isCoach && appMode === 'coaching'
-  const fromHistory =
-    view === 'history' ||
-    ((view === 'workout' || view === 'log') && workoutSource === 'history')
   const topTab = coaching
     ? view === 'account'
       ? 'account'
@@ -770,25 +1344,34 @@ export default function App() {
         ? 'leaderboard'
         : view === 'account'
           ? 'account'
-          : fromHistory
+          : view === 'history'
             ? 'history'
             : 'calendar'
 
+  const accountView = (
+    <AccountView
+      email={session.user.email}
+      onSignOut={handleSignOut}
+      signOutError={signOutError}
+      onOpenProposals={() => setView('proposals')}
+      onCoachLinksChange={handleCoachLinksChange}
+      isCoach={isCoach}
+      onAccountDeleted={handleAccountDeleted}
+    />
+  )
+
   return (
     <>
-      {isCoach ? (
-        <ModeSwitcher mode={appMode} onChange={handleModeChange} />
-      ) : null}
+      {modeSwitcher}
       <div className="pb-tab-bar">
         {coaching ? (
           view === 'account' ? (
-            <AccountView
-              email={session.user.email}
-              onSignOut={handleSignOut}
-              onOpenProposals={() => setView('proposals')}
-            />
+            accountView
           ) : (
-            <AthletesView coachId={session.user.id} rosterNonce={rosterNonce} />
+            <AthletesView
+              coachId={userId ?? session.user.id}
+              rosterNonce={rosterNonce}
+            />
           )
         ) : view === 'progress' ? (
           <ProgressView
@@ -799,29 +1382,27 @@ export default function App() {
         ) : view === 'leaderboard' ? (
           <LeaderboardView currentUserId={userId ?? session.user.id} />
         ) : view === 'account' ? (
-          <AccountView
-            email={session.user.email}
-            onSignOut={handleSignOut}
-            onOpenProposals={() => setView('proposals')}
-          />
+          accountView
         ) : view === 'history' ? (
           <HistoryView
             scheduledWorkouts={scheduledWorkouts}
+            progressById={progressById}
             getWorkout={getWorkout}
             workoutDetails={workoutDetails}
-            onSelectScheduled={(id) => openWorkout(id, 'history')}
+            onSelectScheduled={openWorkout}
           />
         ) : (
           <CalendarView
-            scheduledWorkouts={calendarScheduled}
+            scheduledWorkouts={scheduledWorkouts}
+            upcomingWorkouts={calendarScheduled}
+            progressById={progressById}
             getWorkout={getWorkout}
             onSelectScheduled={openWorkout}
-            onOpenHistory={() => {
-              setWorkoutSource('history')
-              setView('history')
-            }}
+            onOpenHistory={() => setView('history')}
+            month={calendarMonth}
+            onMonthChange={setCalendarMonth}
             canGenerateNextWeek={nextWeekEligibility.ready}
-            coachManagesTraining={hasActiveCoach}
+            coachManagesTraining={coachStatus === 'coached'}
             onGenerateNextWeek={handleGenerateNextWeek}
             generatingNextWeek={generatingNextWeek}
             generateNextWeekError={nextWeekError}
@@ -829,18 +1410,9 @@ export default function App() {
         )}
       </div>
       <TabBar
-        tabs={coaching ? COACHING_TABS : TRAINING_TABS}
         active={topTab}
-        onChange={(tab) => {
-          setView(tab)
-          setScheduledId(null)
-          setWorkoutExerciseId(null)
-          setEditLogId(null)
-          setLogShowRpe(false)
-          setJustCompleted(false)
-          setWorkoutSource(tab === 'history' ? 'history' : 'calendar')
-          if (tab === 'athletes') setRosterNonce((n) => n + 1)
-        }}
+        onChange={changeTab}
+        tabs={coaching ? COACHING_TABS : TRAINING_TABS}
       />
     </>
   )

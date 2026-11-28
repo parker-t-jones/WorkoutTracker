@@ -1,9 +1,174 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  createLeaderboardGroup,
   fetchFamilyLeaderboard,
+  fetchMyLeaderboardGroups,
   formatScorePercent,
+  joinLeaderboardGroup,
+  leaveLeaderboardGroup,
   rankLeaderboard,
 } from '../lib/leaderboard'
+
+function isMissingFunctionError(err) {
+  const text = `${err?.code ?? ''} ${err?.message ?? ''}`
+  return /PGRST202|42883|could not find the function|function .* does not exist/i.test(text)
+}
+
+function GroupsSection({ groups, loading, error, onChanged }) {
+  const [code, setCode] = useState('')
+  const [newName, setNewName] = useState('')
+  const [busy, setBusy] = useState(null) // 'join' | 'create' | group id
+  const [message, setMessage] = useState(null) // { type: 'ok' | 'err', text }
+  const [copiedId, setCopiedId] = useState(null)
+
+  async function run(kind, fn, okText) {
+    setBusy(kind)
+    setMessage(null)
+    try {
+      const result = await fn()
+      setMessage({ type: 'ok', text: okText(result) })
+      await onChanged()
+      return true
+    } catch (err) {
+      console.error(err)
+      setMessage({ type: 'err', text: err?.message || 'Something went wrong' })
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function handleJoin(e) {
+    e.preventDefault()
+    const trimmed = code.trim()
+    if (!trimmed) return
+    const ok = await run('join', () => joinLeaderboardGroup(trimmed), () => 'Joined the group.')
+    if (ok) setCode('')
+  }
+
+  async function handleCreate(e) {
+    e.preventDefault()
+    const trimmed = newName.trim()
+    if (!trimmed) return
+    const ok = await run(
+      'create',
+      () => createLeaderboardGroup(trimmed),
+      (joinCode) => `Group created — share code ${joinCode} so others can join.`,
+    )
+    if (ok) setNewName('')
+  }
+
+  async function handleLeave(group) {
+    if (!window.confirm(`Leave "${group.name}"?`)) return
+    await run(group.id, () => leaveLeaderboardGroup(group.id), () => `Left "${group.name}".`)
+  }
+
+  async function handleCopy(group) {
+    try {
+      await navigator.clipboard.writeText(group.join_code)
+      setCopiedId(group.id)
+      setTimeout(() => setCopiedId((id) => (id === group.id ? null : id)), 1500)
+    } catch {
+      setMessage({ type: 'err', text: `Couldn't copy — the code is ${group.join_code}` })
+    }
+  }
+
+  const inputClass =
+    'min-w-0 flex-1 rounded border border-orange-dim/50 bg-bg px-2 py-1.5 text-sm text-ink'
+  const buttonClass =
+    'shrink-0 rounded bg-orange px-3 py-1.5 text-xs font-medium text-on-orange disabled:opacity-60'
+
+  return (
+    <section className="mt-6 rounded border border-orange-dim/40 bg-surface px-3 py-3">
+      <h2 className="font-display text-sm font-semibold">Your groups</h2>
+
+      {loading ? (
+        <p className="mt-2 text-xs text-muted">Loading…</p>
+      ) : error ? (
+        <p role="alert" className="mt-2 text-xs text-danger">
+          {error}
+        </p>
+      ) : groups.length === 0 ? (
+        <p className="mt-2 text-xs text-muted">
+          You&apos;re not in a group yet, so the leaderboard only shows you. Ask
+          a family member for their 6-character join code and enter it below,
+          or create a group and share its code.
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {groups.map((g) => (
+            <li key={g.id} className="flex items-center gap-2 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{g.name}</div>
+                <div className="text-xs text-muted">
+                  {g.member_count} {g.member_count === 1 ? 'member' : 'members'} · code{' '}
+                  <span className="font-mono tracking-wider text-ink">{g.join_code}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleCopy(g)}
+                className="shrink-0 rounded px-2 py-1 text-xs text-muted ring-1 ring-orange-dim/50 hover:bg-surface-alt hover:text-ink"
+              >
+                {copiedId === g.id ? 'Copied' : 'Copy code'}
+              </button>
+              <button
+                type="button"
+                disabled={busy === g.id}
+                onClick={() => handleLeave(g)}
+                className="shrink-0 rounded px-2 py-1 text-xs text-muted hover:bg-surface-alt hover:text-ink disabled:opacity-60"
+              >
+                Leave
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form onSubmit={handleJoin} className="mt-3 flex gap-2">
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder="Join code"
+          maxLength={12}
+          autoCapitalize="characters"
+          autoComplete="off"
+          aria-label="Group join code"
+          className={`${inputClass} font-mono tracking-wider`}
+        />
+        <button type="submit" disabled={busy != null || !code.trim()} className={buttonClass}>
+          {busy === 'join' ? 'Joining…' : 'Join a group'}
+        </button>
+      </form>
+
+      <form onSubmit={handleCreate} className="mt-2 flex gap-2">
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="New group name"
+          maxLength={60}
+          aria-label="New group name"
+          className={inputClass}
+        />
+        <button type="submit" disabled={busy != null || !newName.trim()} className={buttonClass}>
+          {busy === 'create' ? 'Creating…' : 'Create group'}
+        </button>
+      </form>
+
+      {message ? (
+        <p
+          role="status"
+          className={[
+            'mt-2 text-xs',
+            message.type === 'ok' ? 'text-success' : 'text-danger',
+          ].join(' ')}
+        >
+          {message.text}
+        </p>
+      ) : null}
+    </section>
+  )
+}
 
 export default function LeaderboardView({ currentUserId }) {
   const [rows, setRows] = useState([])
@@ -26,9 +191,39 @@ export default function LeaderboardView({ currentUserId }) {
     }
   }, [])
 
+  const [groups, setGroups] = useState([])
+  const [groupsLoading, setGroupsLoading] = useState(true)
+  const [groupsError, setGroupsError] = useState(null)
+  const [groupsUnavailable, setGroupsUnavailable] = useState(false)
+
+  const loadGroups = useCallback(async () => {
+    setGroupsLoading(true)
+    setGroupsError(null)
+    try {
+      setGroups(await fetchMyLeaderboardGroups())
+      setGroupsUnavailable(false)
+    } catch (err) {
+      console.error(err)
+      // Group RPCs missing = 2026-11-hardening.sql not run yet.
+      if (isMissingFunctionError(err)) {
+        setGroupsUnavailable(true)
+      } else {
+        setGroupsError(err?.message || 'Could not load groups')
+      }
+      setGroups([])
+    } finally {
+      setGroupsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     load()
-  }, [load])
+    loadGroups()
+  }, [load, loadGroups])
+
+  const handleGroupsChanged = useCallback(async () => {
+    await Promise.all([load(), loadGroups()])
+  }, [load, loadGroups])
 
   const ranked = useMemo(() => rankLeaderboard(rows, sortBy), [rows, sortBy])
 
@@ -39,7 +234,8 @@ export default function LeaderboardView({ currentUserId }) {
           Leaderboard
         </h1>
         <p className="mt-1 text-sm text-muted">
-          Family completion scores — live from current schedules
+          Completion scores for you and your groups — live from current
+          schedules
         </p>
       </header>
 
@@ -133,6 +329,19 @@ export default function LeaderboardView({ currentUserId }) {
             )
           })}
         </ol>
+      )}
+
+      {groupsUnavailable ? (
+        <p className="mt-6 text-xs text-muted">
+          Leaderboard groups aren’t set up yet.
+        </p>
+      ) : (
+        <GroupsSection
+          groups={groups}
+          loading={groupsLoading}
+          error={groupsError}
+          onChanged={handleGroupsChanged}
+        />
       )}
 
       <p className="mt-6 text-xs text-muted">

@@ -1,54 +1,53 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import CalendarView from './CalendarView'
 import HistoryView from './HistoryView'
-import WorkoutDetail from './WorkoutDetail'
 import WorkoutBuilder from './WorkoutBuilder'
-import {
-  loadProgramData,
-  filterScheduledForCalendar,
-} from '../lib/program'
+import CoachWorkoutView from './coach/CoachWorkoutView'
+import { filterScheduledForCalendar } from '../lib/program'
+import { loadAthleteProgram } from '../lib/coach'
+import { buildScheduledProgress } from '../lib/schedule'
 
-export default function AthleteCalendar({ athlete, onBack }) {
+/**
+ * Coach's view of one ACTIVE athlete: their calendar (tap an empty day to
+ * assign a workout), history, a workout's prescription + logs + notes +
+ * demo media (CoachWorkoutView), and the WorkoutBuilder to create/edit.
+ *
+ * Data comes from loadProgramData(athleteId) — coach_mode.sql gives an
+ * active coach SELECT on the athlete's program, logs and notes. Writes go
+ * through coachWorkouts.saveAthleteWorkout (user_id = athlete; created_by
+ * is set to the coach by the workouts_guard_created_by trigger).
+ */
+export default function AthleteCalendar({ coachId, athlete, onBack }) {
   const athleteId = athlete.id
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [scheduledWorkouts, setScheduledWorkouts] = useState([])
-  const [workoutsById, setWorkoutsById] = useState({})
-  const [workoutDetails, setWorkoutDetails] = useState({})
-  const [logs, setLogs] = useState([])
-  const [logSplits, setLogSplits] = useState([])
+  const [data, setData] = useState(null)
   const [scheduledId, setScheduledId] = useState(null)
-  const [pane, setPane] = useState('upcoming')
-  const [builder, setBuilder] = useState(null)
-
-  const applyData = useCallback((data) => {
-    setScheduledWorkouts(data.scheduledWorkouts ?? [])
-    setWorkoutsById(
-      Object.fromEntries((data.workouts ?? []).map((w) => [w.id, w])),
-    )
-    setWorkoutDetails(data.workoutDetails ?? {})
-    setLogs(data.logs ?? [])
-    setLogSplits(data.logSplits ?? [])
-  }, [])
+  const [pane, setPane] = useState('upcoming') // upcoming | history
+  const [builder, setBuilder] = useState(null) // { dateKey, scheduledId }
+  const [month, setMonth] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
 
   const reload = useCallback(async () => {
-    const data = await loadProgramData(athleteId)
-    applyData(data)
-    return data
-  }, [athleteId, applyData])
+    const next = await loadAthleteProgram(athleteId)
+    setData(next)
+    return next
+  }, [athleteId])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setData(null)
     setScheduledId(null)
     setPane('upcoming')
     setBuilder(null)
 
-    loadProgramData(athleteId)
-      .then((data) => {
-        if (cancelled) return
-        applyData(data)
+    loadAthleteProgram(athleteId)
+      .then((next) => {
+        if (!cancelled) setData(next)
       })
       .catch((err) => {
         console.error(err)
@@ -63,23 +62,32 @@ export default function AthleteCalendar({ athlete, onBack }) {
     return () => {
       cancelled = true
     }
-  }, [athleteId, applyData])
+  }, [athleteId])
 
-  function getWorkout(workoutId) {
-    return workoutsById[workoutId]
-  }
+  const scheduledWorkouts = useMemo(() => data?.scheduledWorkouts ?? [], [data])
+  const workoutDetails = useMemo(() => data?.workoutDetails ?? {}, [data])
+  const logs = useMemo(() => data?.logs ?? [], [data])
+  const logSplits = useMemo(() => data?.logSplits ?? [], [data])
+  const workoutsById = useMemo(
+    () => Object.fromEntries((data?.workouts ?? []).map((w) => [w.id, w])),
+    [data],
+  )
+  const getWorkout = useCallback((id) => workoutsById[id], [workoutsById])
+  const progressById = useMemo(
+    () =>
+      buildScheduledProgress(scheduledWorkouts, workoutDetails, logs, logSplits),
+    [scheduledWorkouts, workoutDetails, logs, logSplits],
+  )
 
   function getScheduledBundle(id) {
     const sw = scheduledWorkouts.find((s) => s.id === id)
     if (!sw) return null
     const detail = workoutDetails[sw.workout_id]
     if (!detail) return null
-    return {
-      ...sw,
-      workout: detail.workout,
-      exercises: detail.exercises,
-    }
+    return { ...sw, workout: detail.workout, exercises: detail.exercises }
   }
+
+  const backToRoster = '← Athletes'
 
   if (loading) {
     return (
@@ -97,7 +105,7 @@ export default function AthleteCalendar({ athlete, onBack }) {
           onClick={onBack}
           className="mb-4 text-sm text-muted hover:text-ink"
         >
-          ← Back to roster
+          {backToRoster}
         </button>
         <p role="alert" className="text-sm text-danger">
           {error}
@@ -106,14 +114,9 @@ export default function AthleteCalendar({ athlete, onBack }) {
     )
   }
 
-  const scheduled =
-    scheduledId != null ? getScheduledBundle(scheduledId) : null
-
   if (builder) {
     const byId =
-      builder.scheduledId != null
-        ? getScheduledBundle(builder.scheduledId)
-        : null
+      builder.scheduledId != null ? getScheduledBundle(builder.scheduledId) : null
     const byDate = scheduledWorkouts.find((s) => s.date === builder.dateKey)
     const editing = byId ?? (byDate ? getScheduledBundle(byDate.id) : null)
     const weIds = new Set((editing?.exercises ?? []).map((we) => we.id))
@@ -128,33 +131,30 @@ export default function AthleteCalendar({ athlete, onBack }) {
         workoutsById={workoutsById}
         hasLogs={hasLogs}
         onBack={() => setBuilder(null)}
-        onSaved={async () => {
-          const dateKey = builder.dateKey
-          try {
-            const data = await reload()
-            setBuilder(null)
-            const match = (data.scheduledWorkouts ?? []).find(
-              (s) => s.date === dateKey,
-            )
-            setScheduledId(match?.id ?? null)
-          } catch (err) {
-            console.error(err)
-            throw err
-          }
+        onSaved={async ({ scheduledId: savedId } = {}) => {
+          const next = await reload()
+          setBuilder(null)
+          const match =
+            (next.scheduledWorkouts ?? []).find((s) => s.id === savedId) ??
+            (next.scheduledWorkouts ?? []).find((s) => s.date === builder.dateKey)
+          setScheduledId(match?.id ?? null)
         }}
       />
     )
   }
 
+  const scheduled = scheduledId != null ? getScheduledBundle(scheduledId) : null
   if (scheduled) {
     return (
-      <WorkoutDetail
+      <CoachWorkoutView
+        coachId={coachId}
+        athleteName={athlete.name}
         scheduled={scheduled}
+        detail={workoutDetails[scheduled.workout_id]}
         logs={logs}
         logSplits={logSplits}
+        exerciseNotes={data?.exerciseNotes ?? []}
         onBack={() => setScheduledId(null)}
-        backLabel={pane === 'history' ? '← History' : '← Calendar'}
-        readOnly
         onEdit={() =>
           setBuilder({ dateKey: scheduled.date, scheduledId: scheduled.id })
         }
@@ -166,11 +166,12 @@ export default function AthleteCalendar({ athlete, onBack }) {
     return (
       <HistoryView
         scheduledWorkouts={scheduledWorkouts}
+        progressById={progressById}
         getWorkout={getWorkout}
         workoutDetails={workoutDetails}
         onSelectScheduled={setScheduledId}
         onBack={onBack}
-        backLabel="← Back to roster"
+        backLabel={backToRoster}
         eyebrow={athlete.name}
         onShowUpcoming={() => setPane('upcoming')}
       />
@@ -179,21 +180,20 @@ export default function AthleteCalendar({ athlete, onBack }) {
 
   return (
     <CalendarView
-      scheduledWorkouts={filterScheduledForCalendar(scheduledWorkouts)}
-      gridWorkouts={scheduledWorkouts}
+      scheduledWorkouts={scheduledWorkouts}
+      upcomingWorkouts={filterScheduledForCalendar(scheduledWorkouts)}
+      progressById={progressById}
       getWorkout={getWorkout}
       onSelectScheduled={setScheduledId}
-      onSelectDay={(dateKey) => {
-        const existing = scheduledWorkouts.find((s) => s.date === dateKey)
-        if (existing) setScheduledId(existing.id)
-        else setBuilder({ dateKey, scheduledId: null })
-      }}
+      onSelectDay={(dateKey) => setBuilder({ dateKey, scheduledId: null })}
       writable
-      hint="Tap a day to add or edit a workout."
+      hint="Tap an empty day to assign a workout, or a workout to review and edit it."
       onOpenHistory={() => setPane('history')}
+      month={month}
+      onMonthChange={setMonth}
       eyebrow={athlete.name}
       onBack={onBack}
-      backLabel="← Back to roster"
+      backLabel={backToRoster}
     />
   )
 }

@@ -44,3 +44,42 @@ export async function fetchFamilyLeaderboard(asOf = new Date()) {
   if (error) throw error
   return data ?? []
 }
+
+function requireClient() {
+  if (!supabase) {
+    throw new Error('Missing Supabase config')
+  }
+  return supabase
+}
+
+/** Groups the caller belongs to: { id, name, join_code, member_count, joined_at }. */
+export async function fetchMyLeaderboardGroups() {
+  const { data, error } = await requireClient().rpc('my_leaderboard_groups')
+  if (error) throw error
+  return data ?? []
+}
+
+/** Create a group (caller becomes a member). Returns its 6-char join code. */
+export async function createLeaderboardGroup(name) {
+  const { data, error } = await requireClient().rpc('create_leaderboard_group', {
+    p_name: name,
+  })
+  if (error) throw error
+  return data
+}
+
+/** Join a group by its join code. Returns the group id. */
+export async function joinLeaderboardGroup(code) {
+  const { data, error } = await requireClient().rpc('join_leaderboard_group', {
+    p_code: code,
+  })
+  if (error) throw error
+  return data
+}
+
+export async function leaveLeaderboardGroup(groupId) {
+  const { error } = await requireClient().rpc('leave_leaderboard_group', {
+    p_group_id: groupId,
+  })
+  if (error) throw error
+}

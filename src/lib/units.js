@@ -99,9 +99,10 @@ export function computePace(durationSeconds, distance) {
   if (!Number.isFinite(dur) || !Number.isFinite(dist) || dist <= 0 || dur <= 0) {
     return null
   }
-  const secPer = dur / dist
+  // Round total seconds first so 7:59.6 becomes 8:00, never "7:60".
+  const secPer = Math.round(dur / dist)
   const m = Math.floor(secPer / 60)
-  const s = Math.round(secPer % 60)
+  const s = secPer % 60
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
@@ -110,4 +111,56 @@ export function formatDistance(value, unit = getDistanceUnit()) {
   if (!Number.isFinite(n)) return '—'
   const rounded = Math.round(n * 100) / 100
   return `${rounded} ${distanceUnitLabel(unit)}`
+}
+
+const WEIGHT_STORAGE_KEY = 'wt-weight-unit'
+
+/** @returns {'lb' | 'kg'} */
+export function getWeightUnit() {
+  try {
+    const v = localStorage.getItem(WEIGHT_STORAGE_KEY)
+    return v === 'kg' ? 'kg' : 'lb'
+  } catch {
+    return 'lb'
+  }
+}
+
+/** @param {'lb' | 'kg'} unit */
+export function setWeightUnit(unit) {
+  const next = unit === 'kg' ? 'kg' : 'lb'
+  try {
+    localStorage.setItem(WEIGHT_STORAGE_KEY, next)
+  } catch {
+    /* ignore */
+  }
+  document.dispatchEvent(
+    new CustomEvent('wt-weight-unit-change', { detail: next }),
+  )
+  return next
+}
+
+const LB_PER_KG = 2.20462
+
+/** Convert weight between lb and kg. null/undefined unit = lb (legacy rows). */
+export function convertWeight(value, fromUnit, toUnit) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return n
+  const from = fromUnit === 'kg' ? 'kg' : 'lb'
+  const to = toUnit === 'kg' ? 'kg' : 'lb'
+  if (from === to) return n
+  return from === 'kg' ? n * LB_PER_KG : n / LB_PER_KG
+}
+
+/** Round a converted weight for display (0.1 precision, trailing .0 dropped). */
+export function roundWeight(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return n
+  return Math.round(n * 10) / 10
+}
+
+/** Distance rounded for prefilling an input (2 decimals). */
+export function roundDistance(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return n
+  return Math.round(n * 100) / 100
 }

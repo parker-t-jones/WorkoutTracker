@@ -1,42 +1,13 @@
-import { supabase } from './supabase'
+/**
+ * Sign-in split (athlete vs coach) and a coach's Training/Coaching mode,
+ * kept in sessionStorage. Routing state only: users.is_coach (returned by
+ * ensureProfile) decides whether Coaching mode is offered, and the coach
+ * RPCs / RLS enforce the real permissions server-side. The app cannot set
+ * is_coach (users_guard_is_coach in 2026-11-hardening.sql).
+ */
 
 const ROLE_KEY = 'wt-sign-in-role'
 const MODE_KEY = 'wt-app-mode'
-
-function assertSupabase() {
-  if (!supabase) {
-    throw new Error(
-      'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env',
-    )
-  }
-  return supabase
-}
-
-/** Look up is_coach and whether this user is an accepted athlete. */
-export async function loadRoleContext(userId) {
-  const client = assertSupabase()
-
-  const { data: profile, error: profileError } = await client
-    .from('users')
-    .select('id, is_coach')
-    .eq('id', userId)
-    .maybeSingle()
-
-  if (profileError) throw profileError
-
-  const { count, error: linkError } = await client
-    .from('coach_athletes')
-    .select('id', { count: 'exact', head: true })
-    .eq('athlete_id', userId)
-    .eq('status', 'active')
-
-  if (linkError) throw linkError
-
-  return {
-    isCoach: Boolean(profile?.is_coach),
-    hasActiveCoach: (count ?? 0) > 0,
-  }
-}
 
 export function getIntendedRole() {
   try {

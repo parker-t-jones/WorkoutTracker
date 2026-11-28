@@ -99,6 +99,12 @@ body::before {
   z-index: 1;
   min-height: 100vh;
   min-height: 100dvh;
+  /* viewport-fit=cover + black-translucent status bar: keep content below
+     the notch / status bar on iOS (0 elsewhere). */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  box-sizing: border-box;
 }
 
 /* Reserve space for fixed bottom tab bar + iOS home indicator */

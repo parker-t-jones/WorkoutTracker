@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
-import { filterScheduledForHistory } from '../lib/adapt'
+import ScheduledRow from './calendar/ScheduledRow'
+import { todayKey as getTodayKey } from '../lib/dates'
+import { groupHistoryByWeek, scheduledStatus } from '../lib/schedule'
 
+const EMPTY_PROGRESS = new Map()
 const WEEKS_PER_PAGE = 4
 
 function matchesQuery(sw, query, getWorkout, workoutDetails) {
@@ -14,79 +17,44 @@ function matchesQuery(sw, query, getWorkout, workoutDetails) {
   )
 }
 
-function groupByWeek(scheduled, getWorkout) {
-  const groups = new Map()
-  for (const sw of scheduled) {
-    const weekNumber = getWorkout(sw.workout_id)?.week_number ?? 0
-    if (!groups.has(weekNumber)) groups.set(weekNumber, [])
-    groups.get(weekNumber).push(sw)
-  }
-  return [...groups.entries()]
-    .map(([weekNumber, items]) => ({
-      weekNumber,
-      items: items.slice().sort((a, b) => b.date.localeCompare(a.date)),
-    }))
-    .sort((a, b) => {
-      const aMax = a.items[0]?.date ?? ''
-      const bMax = b.items[0]?.date ?? ''
-      if (aMax !== bMax) return bMax.localeCompare(aMax)
-      return b.weekNumber - a.weekNumber
-    })
-}
-
-function CompletionMark({ done }) {
-  return (
-    <span
-      className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-orange-dim/40 bg-transparent"
-      aria-label={done ? 'Completed' : 'Pending'}
-    >
-      {done ? (
-        <svg
-          viewBox="0 0 16 16"
-          className="h-3 w-3 text-ink/70"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
-        </svg>
-      ) : null}
-    </span>
-  )
-}
-
+/**
+ * Past scheduled workouts (before today), newest first, grouped by program
+ * week, with search (focus or exercise name) and "show earlier weeks" paging.
+ * Tapping one opens the workout (athlete: WorkoutDetail, where it can still
+ * be logged late; coach: the athlete's read-only workout view).
+ *
+ * Used as the athlete's History tab and inside the coach's AthleteCalendar.
+ */
 export default function HistoryView({
   scheduledWorkouts,
+  progressById = EMPTY_PROGRESS,
   getWorkout,
   workoutDetails = {},
   onSelectScheduled,
   onBack,
-  backLabel = '← Back',
-  eyebrow = 'Past weeks',
+  backLabel = '← Calendar',
+  eyebrow = null,
   onShowUpcoming,
 }) {
+  const todayKey = getTodayKey()
   const [query, setQuery] = useState('')
   const [visibleWeeks, setVisibleWeeks] = useState(WEEKS_PER_PAGE)
 
-  const past = useMemo(
-    () => filterScheduledForHistory(scheduledWorkouts),
-    [scheduledWorkouts],
-  )
-
   const filtered = useMemo(
     () =>
-      past.filter((sw) =>
+      (scheduledWorkouts ?? []).filter((sw) =>
         matchesQuery(sw, query, getWorkout, workoutDetails),
       ),
-    [past, query, getWorkout, workoutDetails],
+    [scheduledWorkouts, query, getWorkout, workoutDetails],
   )
 
+  const allGroups = useMemo(
+    () => groupHistoryByWeek(scheduledWorkouts, getWorkout, todayKey),
+    [scheduledWorkouts, getWorkout, todayKey],
+  )
   const groups = useMemo(
-    () => groupByWeek(filtered, getWorkout),
-    [filtered, getWorkout],
+    () => groupHistoryByWeek(filtered, getWorkout, todayKey),
+    [filtered, getWorkout, todayKey],
   )
 
   const shown = groups.slice(0, visibleWeeks)
@@ -98,14 +66,14 @@ export default function HistoryView({
         <button
           type="button"
           onClick={onBack}
-          className="mb-4 text-sm text-muted hover:text-ink"
+          className="-ml-2 mb-2 min-h-11 px-2 text-sm text-muted hover:text-ink"
         >
           {backLabel}
         </button>
       ) : null}
 
       <header className="mb-6">
-        <p className="text-sm text-muted">{eyebrow}</p>
+        {eyebrow ? <p className="text-sm text-muted">{eyebrow}</p> : null}
         <div className="flex items-baseline justify-between gap-3">
           <h1 className="font-display text-2xl font-semibold tracking-tight">
             History
@@ -120,69 +88,74 @@ export default function HistoryView({
             </button>
           ) : null}
         </div>
+        <p className="mt-1 text-sm text-muted">
+          Past workouts, newest first. Tap one to review it
+          {onShowUpcoming ? '.' : ' or log it late.'}
+        </p>
       </header>
 
-      <input
-        type="search"
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value)
-          setVisibleWeeks(WEEKS_PER_PAGE)
-        }}
-        placeholder="Search by name or focus"
-        aria-label="Search past workouts"
-        className="mb-6 w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
-      />
+      {allGroups.length ? (
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            setVisibleWeeks(WEEKS_PER_PAGE)
+          }}
+          placeholder="Search by exercise or focus"
+          aria-label="Search past workouts"
+          className="mb-6 w-full rounded border border-orange-dim/50 bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-orange focus:outline-none focus:ring-1 focus:ring-orange"
+        />
+      ) : null}
 
-      {past.length === 0 ? (
-        <p className="text-sm text-muted">
-          No past weeks yet. Completed sessions from earlier weeks will show
-          up here.
-        </p>
-      ) : filtered.length === 0 ? (
+      {allGroups.length === 0 ? (
+        <p className="text-sm text-muted">No past workouts yet.</p>
+      ) : groups.length === 0 ? (
         <p className="text-sm text-muted">
           No workouts match “{query.trim()}”.
         </p>
-      ) : (
-        <div className="space-y-6">
-          {shown.map((group) => (
-            <ul key={group.weekNumber} className="space-y-2">
-              <li className="font-display text-sm font-medium text-muted">
-                {group.weekNumber > 0 ? `Week ${group.weekNumber}` : 'Earlier'}
-              </li>
-              {group.items.map((sw) => {
-                const workout = getWorkout(sw.workout_id)
-                const done = sw.status === 'completed'
-                return (
+      ) : null}
+
+      <div className="space-y-6">
+        {shown.map(({ weekNumber, items }) => {
+          const statuses = items.map((sw) =>
+            scheduledStatus(sw, progressById.get(sw.id), todayKey),
+          )
+          const completed = statuses.filter((s) => s === 'completed').length
+          return (
+            <section
+              key={weekNumber ?? 'unknown'}
+              aria-labelledby={`history-week-${weekNumber ?? 'unknown'}`}
+            >
+              <div className="mb-2 flex items-baseline justify-between">
+                <h2
+                  id={`history-week-${weekNumber ?? 'unknown'}`}
+                  className="font-display text-sm font-medium text-muted"
+                >
+                  {weekNumber != null ? `Week ${weekNumber}` : 'Other'}
+                </h2>
+                <span className="font-mono text-xs text-muted">
+                  {completed}/{items.length} completed
+                </span>
+              </div>
+              <ul className="space-y-2">
+                {items.map((sw, i) => (
                   <li key={sw.id}>
-                    <button
-                      type="button"
-                      onClick={() => onSelectScheduled(sw.id)}
-                      className={[
-                        'flex w-full items-center gap-3 rounded border bg-surface px-3 py-3 text-left hover:border-orange',
-                        done ? 'border-orange/20' : 'border-orange',
-                      ].join(' ')}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="font-display font-medium">
-                          {workout?.focus ?? 'Workout'}
-                        </div>
-                        <div className="font-mono text-sm text-muted">
-                          {sw.date}
-                          {workout?.week_number != null
-                            ? ` · Week ${workout.week_number}`
-                            : ''}
-                        </div>
-                      </div>
-                      <CompletionMark done={done} />
-                    </button>
+                    <ScheduledRow
+                      sw={sw}
+                      workout={getWorkout(sw.workout_id)}
+                      status={statuses[i]}
+                      progress={progressById.get(sw.id)}
+                      onSelect={onSelectScheduled}
+                      showWeek={false}
+                    />
                   </li>
-                )
-              })}
-            </ul>
-          ))}
-        </div>
-      )}
+                ))}
+              </ul>
+            </section>
+          )
+        })}
+      </div>
 
       {remaining > 0 ? (
         <button

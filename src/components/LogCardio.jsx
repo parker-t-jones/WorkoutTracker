@@ -1,18 +1,38 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  exerciseRpe,
-  isExerciseFullyLogged,
-  prescribedSplitCount,
-} from '../lib/logging'
+import { exerciseRpe, isExerciseFullyLogged } from '../lib/logging'
+import { displayedSplitCount, isRecoverySplit } from '../lib/intervals'
 import {
   combineDurationFields,
   computePace,
+  convertDistance,
   formatDuration,
   formatDistance,
   getDistanceUnit,
+  roundDistance,
   splitDurationFields,
 } from '../lib/units'
 import DurationMinSecFields from './DurationMinSecFields'
+
+/**
+ * Prefill text for a distance input in the device unit. Stored values carry
+ * their own unit (null = assume the device unit, as before).
+ */
+function distancePrefill(value, fromUnit, toUnit) {
+  if (value == null || value === '') return ''
+  const n = Number(value)
+  if (!Number.isFinite(n)) return ''
+  const from = fromUnit === 'km' || fromUnit === 'mi' ? fromUnit : toUnit
+  return String(roundDistance(convertDistance(n, from, toUnit)))
+}
+
+/** Parsed distance input: empty → null (not 0). */
+function parseDistanceInput(text) {
+  const raw = String(text ?? '').trim()
+  if (raw === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
 
 function RpePicker({ value, onSelect, onClear, onSkip, saving, editing }) {
   return (
@@ -99,21 +119,26 @@ function SteadyCardioForm({
   })
   const [distanceText, setDistanceText] = useState(() =>
     existingLog?.actual_distance != null
-      ? String(existingLog.actual_distance)
-      : workoutExercise.target_distance != null
-        ? String(workoutExercise.target_distance)
-        : '',
+      ? distancePrefill(
+          existingLog.actual_distance,
+          existingLog.distance_unit,
+          unit,
+        )
+      : distancePrefill(
+          workoutExercise.target_distance,
+          workoutExercise.distance_unit,
+          unit,
+        ),
   )
 
   const durationSec = combineDurationFields(minutes, seconds)
-  const distance = Number(distanceText)
+  const distance = parseDistanceInput(distanceText)
   const pace =
-    durationSec != null && Number.isFinite(distance) && distance > 0
+    durationSec != null && distance != null && distance > 0
       ? computePace(durationSec, distance)
       : null
   const canSave =
-    (durationSec != null && durationSec > 0) ||
-    (Number.isFinite(distance) && distance > 0)
+    (durationSec != null && durationSec > 0) || (distance != null && distance > 0)
 
   return (
     <div className="space-y-4">
@@ -175,7 +200,7 @@ function SteadyCardioForm({
         onClick={() =>
           onSave({
             actualDurationSeconds: durationSec,
-            actualDistance: Number.isFinite(distance) ? distance : null,
+            actualDistance: distance,
             distanceUnit: unit,
           })
         }
@@ -199,18 +224,21 @@ function IntervalSplitsTable({
   const targets = Array.isArray(workoutExercise.target_splits)
     ? workoutExercise.target_splits
     : []
-  const count = prescribedSplitCount(workoutExercise) || targets.length
+  // One row per target (work + recovery); split_number = index + 1 into the
+  // full target list. Only work rows count toward completion.
+  const count = displayedSplitCount(workoutExercise)
 
   const rows = useMemo(() => {
     return Array.from({ length: count }, (_, i) => {
       const n = i + 1
       const target = targets[i] ?? {}
+      const recovery = isRecoverySplit(targets[i])
       const logged = splits.find(
         (s) =>
           s.split_number === n &&
           (parentLog ? s.log_id === parentLog.id : true),
       )
-      return { n, target, logged }
+      return { n, target, logged, recovery }
     })
   }, [count, targets, splits, parentLog])
 
@@ -227,10 +255,8 @@ function IntervalSplitsTable({
         seconds: split.seconds,
         distance:
           row.logged?.distance != null
-            ? String(row.logged.distance)
-            : row.target.distance != null
-              ? String(row.target.distance)
-              : '',
+            ? distancePrefill(row.logged.distance, row.logged.distance_unit, unit)
+            : distancePrefill(row.target.distance, row.target.unit, unit),
       }
     }
     setDrafts(next)
@@ -246,32 +272,48 @@ function IntervalSplitsTable({
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted">
-        Log each split. Target pace shown when prescribed.
+        Log each work split. Recovery rows are optional. Target pace shown when
+        prescribed.
       </p>
       <ul className="space-y-2">
-        {rows.map(({ n, target, logged }) => {
+        {rows.map(({ n, target, logged, recovery }) => {
           const draft = drafts[n] ?? {
             minutes: '',
             seconds: '',
             distance: '',
           }
           const dur = combineDurationFields(draft.minutes, draft.seconds)
-          const dist = Number(draft.distance)
+          const dist = parseDistanceInput(draft.distance)
           const pace =
-            dur != null && Number.isFinite(dist) && dist > 0
+            dur != null && dist != null && dist > 0
               ? computePace(dur, dist)
               : null
           const canSave =
-            (dur != null && dur > 0) || (Number.isFinite(dist) && dist > 0)
+            (dur != null && dur > 0) || (dist != null && dist > 0)
           return (
             <li
               key={n}
-              className="rounded border border-orange-dim/40 bg-surface px-3 py-3"
+              className={[
+                'rounded border px-3 py-3',
+                recovery
+                  ? 'border-orange-dim/25 bg-surface/60'
+                  : 'border-orange-dim/40 bg-surface',
+              ].join(' ')}
             >
               <div className="mb-2 flex items-baseline justify-between gap-2">
-                <span className="font-display font-medium">
+                <span
+                  className={[
+                    'font-display font-medium',
+                    recovery ? 'text-muted' : '',
+                  ].join(' ')}
+                >
                   Split {n}
                   {target.label ? ` · ${target.label}` : ''}
+                  {recovery ? (
+                    <span className="ml-1 font-sans text-xs font-normal text-muted">
+                      (optional)
+                    </span>
+                  ) : null}
                 </span>
                 <span className="font-mono text-xs text-muted">
                   {target.target_pace
@@ -321,11 +363,11 @@ function IntervalSplitsTable({
                     onSaveSplit({
                       splitNumber: n,
                       durationSeconds: dur,
-                      distance: Number.isFinite(dist) ? dist : null,
+                      distance: dist,
                       distanceUnit: unit,
                     })
                   }
-                  className="rounded bg-orange px-3 py-1.5 text-xs font-medium text-on-orange hover:bg-orange-dim disabled:opacity-60"
+                  className="min-h-11 rounded bg-orange px-4 py-2 text-sm font-medium text-on-orange hover:bg-orange-dim disabled:opacity-60"
                 >
                   {logged ? 'Update' : 'Log'}
                 </button>

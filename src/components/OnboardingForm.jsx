@@ -1,4 +1,12 @@
 import { useEffect, useState } from 'react'
+import {
+  START_NEXT_MONDAY,
+  START_TODAY,
+  defaultStartMode,
+  firstWeekScheduleDates,
+} from '../lib/user'
+import { formatDateKey } from '../lib/dates'
+import { DeleteAccountSheet } from './DeleteAccountSection'
 
 const GOALS = [
   { id: 'strength', label: 'Strength' },
@@ -36,6 +44,7 @@ const STEPS = [
   { key: 'goal', title: 'What’s your main goal?', required: true },
   { key: 'level', title: 'What’s your fitness level?', required: true },
   { key: 'days', title: 'Days per week available?', required: true },
+  { key: 'start', title: 'When do you want to start?', required: true },
   { key: 'session', title: 'How long is a typical session?', required: true },
   { key: 'equipment', title: 'What equipment do you have?', required: true },
   {
@@ -128,6 +137,39 @@ function ChoiceList({ name, options, value, onChange, disabled }) {
   )
 }
 
+/** "Start today" vs "Start next Monday", each previewing its first-week dates. */
+function StartChoice({ daysPerWeek, value, onChange, disabled }) {
+  const options = [START_TODAY, START_NEXT_MONDAY].map((mode) => {
+    const dates = firstWeekScheduleDates(daysPerWeek, mode)
+    return {
+      id: mode,
+      label:
+        mode === START_TODAY
+          ? 'Start today'
+          : `Start next Monday (${formatDateKey(dates[0], { weekday: false })})`,
+      hint: dates.map((d) => formatDateKey(d)).join(' · '),
+    }
+  })
+  return (
+    <div className="space-y-3">
+      <ChoiceList
+        name="start_mode"
+        options={options.map(({ id, label }) => ({ id, label }))}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+      />
+      {options
+        .filter((o) => o.id === value)
+        .map((o) => (
+          <p key={o.id} className="text-xs text-muted">
+            Week 1: <span className="font-mono">{o.hint}</span>
+          </p>
+        ))}
+    </div>
+  )
+}
+
 function isStepValid(stepKey, answers) {
   switch (stepKey) {
     case 'age': {
@@ -146,6 +188,11 @@ function isStepValid(stepKey, answers) {
       return Boolean(answers.experience_level)
     case 'days':
       return Boolean(answers.days_per_week)
+    case 'start':
+      return (
+        answers.start_mode === START_TODAY ||
+        answers.start_mode === START_NEXT_MONDAY
+      )
     case 'session':
       return Boolean(answers.session_length)
     case 'equipment':
@@ -171,6 +218,7 @@ function buildSubmitAnswers(answers) {
     goal,
     experience_level: answers.experience_level,
     days_per_week: Number(answers.days_per_week),
+    start_mode: answers.start_mode,
     session_length: answers.session_length,
     equipment: answers.equipment,
     limitations: String(answers.limitations || '').trim(),
@@ -178,7 +226,15 @@ function buildSubmitAnswers(answers) {
   }
 }
 
-export default function OnboardingForm({ onSubmit, error, submitting, onSignOut }) {
+export default function OnboardingForm({
+  onSubmit,
+  error,
+  submitting,
+  onSignOut,
+  signOutError = null,
+  onAccountDeleted,
+}) {
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState(1)
   const [animKey, setAnimKey] = useState(0)
@@ -191,6 +247,7 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
     goalOther: '',
     experience_level: '',
     days_per_week: '4',
+    start_mode: defaultStartMode(),
     session_length: '',
     equipment: '',
     limitations: '',
@@ -264,15 +321,38 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
         ) : (
           <span className="text-sm text-muted">Set up</span>
         )}
-        <button
-          type="button"
-          onClick={onSignOut}
-          disabled={submitting}
-          className="text-sm text-muted underline hover:text-ink disabled:opacity-60"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-4">
+          {onAccountDeleted ? (
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(true)}
+              disabled={submitting}
+              className="text-sm text-muted underline hover:text-danger disabled:opacity-60"
+            >
+              Delete account
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onSignOut}
+            disabled={submitting}
+            className="text-sm text-muted underline hover:text-ink disabled:opacity-60"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
+      {deleteOpen ? (
+        <DeleteAccountSheet
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={onAccountDeleted}
+        />
+      ) : null}
+      {signOutError ? (
+        <p role="alert" className="-mt-4 mb-4 text-right text-sm text-danger">
+          {signOutError}
+        </p>
+      ) : null}
 
       <div
         className="mb-6 h-1 overflow-hidden rounded bg-surface-alt"
@@ -420,6 +500,15 @@ export default function OnboardingForm({ onSubmit, error, submitting, onSignOut 
                 ))}
               </select>
             </label>
+          ) : null}
+
+          {current.key === 'start' ? (
+            <StartChoice
+              daysPerWeek={Number(answers.days_per_week)}
+              value={answers.start_mode}
+              onChange={(start_mode) => patch({ start_mode })}
+              disabled={submitting}
+            />
           ) : null}
 
           {current.key === 'session' ? (
